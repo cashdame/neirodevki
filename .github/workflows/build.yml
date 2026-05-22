@@ -1,7 +1,5 @@
 name: build-flux-worker
 
-# Builds the Flux + LoRA serverless image and pushes it to GHCR.
-# Triggers on push to main (e.g. after swapping a LoRA) and manually.
 on:
   push:
     branches: [main]
@@ -11,26 +9,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read      # checkout (incl. LFS)
-      packages: write     # push to ghcr.io
+      contents: read
+      packages: write
     steps:
-      # Default runner has ~14 GB free; need ~35 GB for base image + Flux 17 GB.
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/local/lib/android        # ~10 GB
-          sudo rm -rf /usr/share/dotnet             # ~5 GB
-          sudo rm -rf /opt/ghc                      # ~2 GB
-          sudo rm -rf /opt/hostedtoolcache          # ~7 GB
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/share/swift
-          sudo rm -rf /usr/local/share/powershell
-          sudo rm -rf /usr/local/share/chromium
-          sudo rm -rf /usr/local/lib/node_modules
-          sudo apt-get remove -y '^llvm-.*' '^libllvm.*' '^php.*' mongodb* mysql* 2>/dev/null || true
-          sudo apt-get autoremove -y 2>/dev/null || true
-          docker system prune -af 2>/dev/null || true
-          df -h /
-
       - name: Checkout (with LFS)
         uses: actions/checkout@v4
         with:
@@ -46,7 +27,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # GHCR image names must be lowercase; owner login may contain capitals.
       - name: Compute image name
         id: img
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
@@ -59,7 +39,3 @@ jobs:
           tags: |
             ${{ steps.img.outputs.name }}:latest
             ${{ steps.img.outputs.name }}:${{ github.sha }}
-          # cache-to disabled for first build: saving 17GB compressed layer
-          # simultaneously with raw layer was overflowing disk.
-          # Re-enable after first successful push.
-          cache-from: type=registry,ref=${{ steps.img.outputs.name }}:buildcache
