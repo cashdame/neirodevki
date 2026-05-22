@@ -1,0 +1,5 @@
+# Keep the build context lean -- only the LoRA files under models/ are needed.
+.git
+.github
+*.md
+gen_flux_serverless.py
