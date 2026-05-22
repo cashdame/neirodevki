@@ -14,14 +14,21 @@ jobs:
       contents: read      # checkout (incl. LFS)
       packages: write     # push to ghcr.io
     steps:
-      # Default runner has ~14 GB free; the 17 GB Flux layer needs more headroom.
+      # Default runner has ~14 GB free; need ~35 GB for base image + Flux 17 GB.
       - name: Free disk space
         run: |
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/lib/android        # ~10 GB
+          sudo rm -rf /usr/share/dotnet             # ~5 GB
+          sudo rm -rf /opt/ghc                      # ~2 GB
+          sudo rm -rf /opt/hostedtoolcache          # ~7 GB
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /usr/local/share/chromium
+          sudo rm -rf /usr/local/lib/node_modules
           sudo apt-get remove -y '^llvm-.*' '^libllvm.*' '^php.*' mongodb* mysql* 2>/dev/null || true
           sudo apt-get autoremove -y 2>/dev/null || true
+          docker system prune -af 2>/dev/null || true
           df -h /
 
       - name: Checkout (with LFS)
