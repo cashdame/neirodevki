@@ -15,4 +15,4 @@ COPY models/loras/aidmaNSFWunlock-FLUX-V0.2.safetensors /comfyui/models/loras/
 # Entrypoint: symlinks Flux from volume, then starts the worker
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-CMD ["/entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
