@@ -16,13 +16,13 @@ jobs:
     steps:
       # Default runner has ~14 GB free; the 17 GB Flux layer needs more headroom.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@v1.0.0
-        with:
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: true
+        run: |
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo apt-get remove -y '^llvm-.*' '^libllvm.*' '^php.*' mongodb* mysql* 2>/dev/null || true
+          sudo apt-get autoremove -y 2>/dev/null || true
+          df -h /
 
       - name: Checkout (with LFS)
         uses: actions/checkout@v4
