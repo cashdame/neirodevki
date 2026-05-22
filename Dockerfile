@@ -14,7 +14,7 @@ FROM runpod/worker-comfyui:5.8.5-base
 # Comfy-Org mirror is public (no HF token needed). Cached via registry buildcache;
 # only re-downloads if this RUN instruction text changes.
 RUN mkdir -p /comfyui/models/checkpoints /comfyui/models/loras && \
-    wget -q --show-progress --tries=3 --continue \
+    wget -q --tries=3 --continue \
       -O /comfyui/models/checkpoints/flux1-dev-fp8.safetensors \
       https://huggingface.co/Comfy-Org/flux1-dev/resolve/main/flux1-dev-fp8.safetensors
 
