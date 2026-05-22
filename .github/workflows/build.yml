@@ -59,7 +59,7 @@ jobs:
           tags: |
             ${{ steps.img.outputs.name }}:latest
             ${{ steps.img.outputs.name }}:${{ github.sha }}
-          # Registry cache keeps the heavy Flux layer between runs so LoRA-only
-          # changes don't re-download 17 GB.
+          # cache-to disabled for first build: saving 17GB compressed layer
+          # simultaneously with raw layer was overflowing disk.
+          # Re-enable after first successful push.
           cache-from: type=registry,ref=${{ steps.img.outputs.name }}:buildcache
-          cache-to: type=registry,ref=${{ steps.img.outputs.name }}:buildcache,mode=max
