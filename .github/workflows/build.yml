@@ -18,9 +18,11 @@ jobs:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@v1.0.0
         with:
-          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
           large-packages: true
-          docker-images: true
+          swap-storage: true
 
       - name: Checkout (with LFS)
         uses: actions/checkout@v4
