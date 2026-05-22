@@ -12,6 +12,11 @@ jobs:
       contents: read
       packages: write
     steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache
+          df -h /
+
       - name: Checkout (with LFS)
         uses: actions/checkout@v4
         with:
