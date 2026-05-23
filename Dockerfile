@@ -9,7 +9,7 @@ FROM runpod/worker-comfyui:5.8.5-base
 
 # LoRAs baked in
 RUN mkdir -p /comfyui/models/loras
-COPY models/loras/leila_lora_v2.safetensors             /comfyui/models/loras/
+COPY models/loras/leila_lora_v3.safetensors             /comfyui/models/loras/
 COPY models/loras/aidmaNSFWunlock-FLUX-V0.2.safetensors /comfyui/models/loras/
 
 # Entrypoint: symlinks Flux from volume, then starts the worker

@@ -36,14 +36,27 @@ prompt, seed, W, H = ns.prompt, ns.seed, ns.width, ns.height
 endpoint = ns.endpoint
 
 # --- LoRA stack (mirrors gen_flux_pod.py) ------------------------------------
-LEILA_LORA = "leila_lora_v2.safetensors"
+LEILA_LORA = os.environ.get("LEILA_LORA", "leila_lora_v3.safetensors")
 UNLOCK_LORA = "aidmaNSFWunlock-FLUX-V0.2.safetensors"
-UNLOCK_STRENGTH = float(os.environ.get("UNLOCK", "0.55"))  # 0 disables the adapter
+UNLOCK_STRENGTH = float(os.environ.get("UNLOCK", "0.7"))  # 0 disables the adapter
 UNLOCK_TRIGGER = "aidmaNSFWunlock"
+# Areola/nipple detail tail. base flux1-dev-fp8 (not the LoRA) renders nipples, so
+# explicit positive guidance is what fixes texture/symmetry (cfg=1.0 ignores negatives).
+# Only appended on the nude path (unlock active); pointless for SFW/clothed prompts.
+NIPPLE_DETAIL = "detailed natural areolas, symmetric nipples, soft realistic areola texture"
 
 use_unlock = UNLOCK_STRENGTH > 0
-if use_unlock and UNLOCK_TRIGGER.lower() not in prompt.lower():
-    prompt += ", " + UNLOCK_TRIGGER
+if use_unlock:
+    if UNLOCK_TRIGGER.lower() not in prompt.lower():
+        prompt += ", " + UNLOCK_TRIGGER
+    if "areola" not in prompt.lower():
+        prompt += ", " + NIPPLE_DETAIL
+
+# --- sampler overrides (env; defaults = the A/B-winning "B" recipe) -----------
+STEPS = int(os.environ.get("STEPS", "32"))
+SAMPLER = os.environ.get("SAMPLER", "dpmpp_2m")
+SCHEDULER = os.environ.get("SCHEDULER", "beta")
+OUT_TAG = os.environ.get("OUT_TAG", "")  # appended to filename to keep A/B apart
 
 
 def build_workflow():
@@ -73,8 +86,8 @@ def build_workflow():
     wf["5"] = {"class_type": "FluxGuidance", "inputs": {"conditioning": ["3", 0], "guidance": 3.5}}
     wf["7"] = {"class_type": "KSampler",
                "inputs": {"model": [last, 0], "positive": ["5", 0], "negative": ["4", 0],
-                          "latent_image": ["6", 0], "seed": seed, "steps": 22, "cfg": 1.0,
-                          "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}}
+                          "latent_image": ["6", 0], "seed": seed, "steps": STEPS, "cfg": 1.0,
+                          "sampler_name": SAMPLER, "scheduler": SCHEDULER, "denoise": 1.0}}
     return wf
 
 
@@ -90,20 +103,30 @@ def load_key():
     sys.exit("RUNPOD_API_KEY not found in env or credentials file")
 
 
+def _http(url, key, payload=None, retries=5):
+    for attempt in range(retries):
+        try:
+            body = json.dumps(payload).encode() if payload is not None else None
+            method = "POST" if payload is not None else "GET"
+            r = urllib.request.Request(url, data=body, method=method)
+            r.add_header("Authorization", "Bearer " + key)
+            if body:
+                r.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(r, timeout=30) as resp:
+                return json.loads(resp.read().decode())
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(5 * (attempt + 1))
+            else:
+                raise
+
+
 def post(url, key, payload):
-    body = json.dumps(payload).encode()
-    r = urllib.request.Request(url, data=body, method="POST")
-    r.add_header("Authorization", "Bearer " + key)
-    r.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(r, timeout=120) as resp:
-        return json.loads(resp.read().decode())
+    return _http(url, key, payload=payload)
 
 
 def get(url, key):
-    r = urllib.request.Request(url)
-    r.add_header("Authorization", "Bearer " + key)
-    with urllib.request.urlopen(r, timeout=120) as resp:
-        return json.loads(resp.read().decode())
+    return _http(url, key)
 
 
 def save_image(img, seed, idx):
@@ -113,7 +136,7 @@ def save_image(img, seed, idx):
     kind = img.get("type")
     data = img.get("data", "")
     suffix = f"_{idx}" if idx > 0 else ""
-    path = os.path.join(out_dir, f"leila_{seed}{suffix}.png")
+    path = os.path.join(out_dir, f"leila_{seed}{OUT_TAG}{suffix}.png")
     if kind == "base64":
         with open(path, "wb") as f:
             f.write(base64.b64decode(data))
@@ -138,9 +161,10 @@ def main():
     if not job_id:
         sys.exit(f"No job id in response: {json.dumps(job)[:400]}")
 
-    # Poll. Cold start (image pull + 17 GB into VRAM) can take a few minutes the
-    # first time a worker spins up; warm runs finish in seconds.
-    for i in range(180):  # up to ~6 min
+    # Poll. Cold start (worker scaled to zero -> image pull + 17 GB into VRAM) can
+    # sit IN_QUEUE for several minutes; warm runs finish in seconds. ~15 min cap so
+    # a cold first request doesn't get dropped mid-spinup.
+    for i in range(450):  # up to ~15 min
         st = get(f"{base}/status/{job_id}", key)
         status = st.get("status")
         if status == "COMPLETED":
