@@ -3,3 +3,9 @@
 *.ckpt        filter=lfs diff=lfs merge=lfs -text
 *.pt          filter=lfs diff=lfs merge=lfs -text
 *.bin         filter=lfs diff=lfs merge=lfs -text
+
+# Shell scripts and Dockerfile MUST stay LF -- CRLF breaks the bash shebang
+# inside the Linux image ("#!/bin/bash\r: bad interpreter").
+*.sh         text eol=lf
+entrypoint.sh text eol=lf
+Dockerfile   text eol=lf

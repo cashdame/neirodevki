@@ -15,6 +15,7 @@ jobs:
       - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache
+          sudo docker image prune -af || true
           df -h /
 
       - name: Checkout (with LFS)
@@ -44,3 +45,5 @@ jobs:
           tags: |
             ${{ steps.img.outputs.name }}:latest
             ${{ steps.img.outputs.name }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

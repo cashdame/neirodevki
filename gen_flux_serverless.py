@@ -103,7 +103,9 @@ def load_key():
     sys.exit("RUNPOD_API_KEY not found in env or credentials file")
 
 
-def _http(url, key, payload=None, retries=5):
+def _http(url, key, payload=None, retries=10):
+    # retries high + capped backoff so a flaky VPN tunnel (ConnectionReset on the
+    # way to RunPod) doesn't kill a run -- the job lives on the endpoint regardless.
     for attempt in range(retries):
         try:
             body = json.dumps(payload).encode() if payload is not None else None
@@ -116,7 +118,7 @@ def _http(url, key, payload=None, retries=5):
                 return json.loads(resp.read().decode())
         except Exception as e:
             if attempt < retries - 1:
-                time.sleep(5 * (attempt + 1))
+                time.sleep(min(5 * (attempt + 1), 20))
             else:
                 raise
 
@@ -165,7 +167,14 @@ def main():
     # sit IN_QUEUE for several minutes; warm runs finish in seconds. ~15 min cap so
     # a cold first request doesn't get dropped mid-spinup.
     for i in range(450):  # up to ~15 min
-        st = get(f"{base}/status/{job_id}", key)
+        try:
+            st = get(f"{base}/status/{job_id}", key)
+        except Exception as e:
+            # VPN tunnel dropped mid-poll: the job keeps running on RunPod, so
+            # don't abort -- wait and retry the same job_id until it's ready.
+            print(f"  (poll network error, retrying: {type(e).__name__})")
+            time.sleep(5)
+            continue
         status = st.get("status")
         if status == "COMPLETED":
             images = st.get("output", {}).get("images", [])
