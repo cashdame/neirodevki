@@ -1,0 +1,129 @@
+# EP2 video worker — ComfyUI + 6 custom nodes for Wan 2.1 i2v pipeline.
+#
+# Base: runpod/worker-comfyui:5.8.5-base (same as EP1 flux-worker — proven working).
+# No model weights baked in — all models live on a RunPod network volume.
+# ENTRYPOINT is check_imports.py for Phase A smoke-test only.
+# Phase B will replace ENTRYPOINT with entrypoint-video.sh.
+#
+# Layer strategy: one RUN per custom node so SHA bump rebuilds only that layer.
+FROM runpod/worker-comfyui:5.8.5-base
+
+# I4: allow custom nodes to import ComfyUI core modules (e.g. folder_paths).
+# Without this, nodes like ReActor and controlnet_aux fail at load time.
+ENV PYTHONPATH=/comfyui
+
+# ---------------------------------------------------------------------------
+# Layer 1: system packages
+# ---------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      cmake \
+      git \
+      libgl1 \
+      libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# Layer 2: core pip deps
+# Note: onnxruntime-gpu and einops are already present in the base image
+# (1.26.0 and 0.8.2 respectively). Pinning them here caused install conflicts
+# in EP1 testing — omitted intentionally.
+# ---------------------------------------------------------------------------
+RUN pip install --no-cache-dir \
+      huggingface_hub \
+      imageio \
+      imageio-ffmpeg \
+      av \
+      onnx==1.16.1 \
+      timm==0.9.16
+
+# ---------------------------------------------------------------------------
+# Layer 3: insightface — needs build-essential from Layer 1
+# ---------------------------------------------------------------------------
+RUN pip install --no-cache-dir insightface==0.7.3
+
+# ---------------------------------------------------------------------------
+# Layer 4: custom nodes (one RUN per node for independent layer caching)
+# ---------------------------------------------------------------------------
+
+# kijai/ComfyUI-WanVideoWrapper @ 088128b
+RUN git clone https://github.com/kijai/ComfyUI-WanVideoWrapper \
+      /comfyui/custom_nodes/ComfyUI-WanVideoWrapper \
+    && cd /comfyui/custom_nodes/ComfyUI-WanVideoWrapper \
+    && git checkout 088128b224242e110d3906c6750e9a3a348a659b \
+    && rm -rf .git
+
+# Fannovel16/ComfyUI-Frame-Interpolation @ 26545cc
+# No requirements.txt at this SHA — deps installed via ComfyUI manager (install.py)
+# at runtime. Nothing to pip-install here.
+RUN git clone https://github.com/Fannovel16/ComfyUI-Frame-Interpolation \
+      /comfyui/custom_nodes/ComfyUI-Frame-Interpolation \
+    && cd /comfyui/custom_nodes/ComfyUI-Frame-Interpolation \
+    && git checkout 26545cc2dd95bc3d27f056016300673bdeee78f5 \
+    && rm -rf .git
+
+# numz/ComfyUI-SeedVR2_VideoUpscaler @ 4490bd1
+RUN git clone https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler \
+      /comfyui/custom_nodes/ComfyUI-SeedVR2_VideoUpscaler \
+    && cd /comfyui/custom_nodes/ComfyUI-SeedVR2_VideoUpscaler \
+    && git checkout 4490bd1f482e026674543386bb2a4d176da245b9 \
+    && rm -rf .git
+
+# ShmuelRonen/ComfyUI-LatentSyncWrapper @ 360d528
+RUN git clone https://github.com/ShmuelRonen/ComfyUI-LatentSyncWrapper \
+      /comfyui/custom_nodes/ComfyUI-LatentSyncWrapper \
+    && cd /comfyui/custom_nodes/ComfyUI-LatentSyncWrapper \
+    && git checkout 360d5283d7276aee68b4237b1387e594e4ce640e \
+    && rm -rf .git
+
+# Fannovel16/comfyui_controlnet_aux @ e8b689a
+RUN git clone https://github.com/Fannovel16/comfyui_controlnet_aux \
+      /comfyui/custom_nodes/comfyui_controlnet_aux \
+    && cd /comfyui/custom_nodes/comfyui_controlnet_aux \
+    && git checkout e8b689a513c3e6b63edc44066560ca5919c0576e \
+    && rm -rf .git
+
+# Gourieff/ComfyUI-ReActor @ 6ad6b35
+RUN git clone https://github.com/Gourieff/ComfyUI-ReActor \
+      /comfyui/custom_nodes/ComfyUI-ReActor \
+    && cd /comfyui/custom_nodes/ComfyUI-ReActor \
+    && git checkout 6ad6b35a4df250d14cb2abf0808c9ffedf59f747 \
+    && rm -rf .git
+
+# ---------------------------------------------------------------------------
+# Layer 5: pip requirements from custom nodes
+#
+# WanVideoWrapper: has requirements.txt
+# Frame-Interpolation: no requirements.txt (install.py only)
+# SeedVR2: has requirements.txt (torch/torchvision already on base — pip skips)
+# LatentSyncWrapper: has requirements.txt
+# controlnet_aux: has requirements.txt — contains onnxruntime-gpu which conflicts
+#                 with the version already in base. Strip it before install.
+# ReActor: has requirements.txt
+# ---------------------------------------------------------------------------
+
+RUN pip install --no-cache-dir \
+      -r /comfyui/custom_nodes/ComfyUI-WanVideoWrapper/requirements.txt
+
+RUN pip install --no-cache-dir \
+      -r /comfyui/custom_nodes/ComfyUI-SeedVR2_VideoUpscaler/requirements.txt
+
+RUN pip install --no-cache-dir \
+      -r /comfyui/custom_nodes/ComfyUI-LatentSyncWrapper/requirements.txt
+
+# controlnet_aux: strip onnxruntime-gpu to avoid version conflict with base image.
+# The base already ships onnxruntime-gpu 1.26.0 which is newer and compatible.
+RUN grep -v "^onnxruntime" \
+      /comfyui/custom_nodes/comfyui_controlnet_aux/requirements.txt \
+    | pip install --no-cache-dir -r /dev/stdin
+
+RUN pip install --no-cache-dir \
+      -r /comfyui/custom_nodes/ComfyUI-ReActor/requirements.txt
+
+# ---------------------------------------------------------------------------
+# Layer 6: smoke-test entrypoint (Phase A only)
+# ---------------------------------------------------------------------------
+COPY check_imports.py /check_imports.py
+# Phase A: ENTRYPOINT overridden for smoke-test. Phase B must restore /start.sh
+# or wrap it in entrypoint-video.sh.
+ENTRYPOINT ["python", "/check_imports.py"]
