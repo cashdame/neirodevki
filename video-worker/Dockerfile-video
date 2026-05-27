@@ -145,9 +145,9 @@ RUN pip install --no-cache-dir \
       -r /comfyui/custom_nodes/ComfyUI-VideoHelperSuite/requirements.txt
 
 # ---------------------------------------------------------------------------
-# Layer 6: smoke-test entrypoint (Phase A only)
+# Layer 6: entrypoint shim + smoke-test helper (Phase B)
 # ---------------------------------------------------------------------------
 COPY check_imports.py /check_imports.py
-# Phase A: ENTRYPOINT overridden for smoke-test. Phase B must restore /start.sh
-# or wrap it in entrypoint-video.sh.
-ENTRYPOINT ["python", "/check_imports.py"]
+COPY entrypoint-video.sh /entrypoint-video.sh
+RUN chmod +x /entrypoint-video.sh
+ENTRYPOINT ["/entrypoint-video.sh"]
