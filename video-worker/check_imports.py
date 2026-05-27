@@ -26,6 +26,7 @@ import importlib
 import importlib.util
 import sys
 import traceback
+import types
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -183,6 +184,35 @@ def main() -> None:
     if custom_nodes_str not in sys.path:
         sys.path.insert(0, custom_nodes_str)
 
+    # ------------------------------------------------------------------
+    # Inject stub modules to prevent the utils-package name collision.
+    #
+    # Problem: one of the custom nodes' transitive deps installs the pip
+    # package 'utils' (a flat utils.py), which shadows /comfyui/utils/.
+    # When Python tries to import the real server.py it walks:
+    #   server.py → app/frontend_management.py → from utils.install_util …
+    # and resolves 'utils' to the pip package instead of the directory,
+    # causing ModuleNotFoundError: 'utils' is not a package.
+    #
+    # Fix: register lightweight stubs in sys.modules BEFORE loading nodes.
+    # Nodes only read server.PromptServer.instance to register web-routes;
+    # they never need the real server.py in headless/CI mode.
+    #
+    # Safety guard: on a real RunPod worker ComfyUI's /start.sh loads
+    # server.py BEFORE custom nodes, so sys.modules['server'] is already
+    # populated.  The 'if … not in' guard ensures we never overwrite the
+    # live module — production inference is unaffected.
+    # ------------------------------------------------------------------
+    if "server" not in sys.modules:
+        _server_stub = types.ModuleType("server")
+        _server_stub.PromptServer = types.SimpleNamespace(instance=None)
+        sys.modules["server"] = _server_stub
+
+    if "app.frontend_management" not in sys.modules:
+        sys.modules["app.frontend_management"] = types.ModuleType(
+            "app.frontend_management"
+        )
+
     total = len(CORE_MODULES) + len(NODE_MODULES)
     if total == 0:
         print("check_imports: no modules to check (both lists empty).")
@@ -202,7 +232,6 @@ def main() -> None:
     import torch
     if not torch.cuda.is_available():
         import collections
-        import types
 
         torch.cuda.is_available = lambda: False
         torch.cuda.current_device = lambda: 0
