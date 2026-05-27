@@ -201,9 +201,27 @@ def main() -> None:
     # reported above before we reach this point.
     import torch
     if not torch.cuda.is_available():
+        import collections
+        import types
+
         torch.cuda.is_available = lambda: False
         torch.cuda.current_device = lambda: 0
         torch.cuda.get_device_name = lambda device=None: "cpu-mock"
+
+        # comfy/model_management.py reads memory_stats(device) at import time
+        # and expects at least 'reserved_bytes.all.current' (and related keys).
+        # defaultdict(int) returns 0 for any key access, so all reads are safe.
+        torch.cuda.memory_stats = lambda device=None: collections.defaultdict(int)
+
+        # comfy/model_management.py also calls get_device_properties(device).total_memory.
+        # 1 << 34 = 16 GiB keeps any downstream division-by-zero away from zero.
+        _MockDeviceProps = types.SimpleNamespace(
+            total_memory=1 << 34,
+            name="cpu-mock",
+            major=0,
+            minor=0,
+        )
+        torch.cuda.get_device_properties = lambda device=None: _MockDeviceProps
 
     # --- Custom nodes ---
     node_failures = check_node_imports(NODE_MODULES)
