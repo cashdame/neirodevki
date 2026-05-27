@@ -1,6 +1,6 @@
 """
-Tests for check_imports.py — server/app.frontend_management mock injection
-and existing CUDA mock behaviour.
+Tests for check_imports.py — server/app.frontend_management mock injection,
+CUDA mock behaviour, and structural-check routing for KJNodes/VHS.
 
 Run from video-worker/ directory:
     pytest tests/test_check_imports.py -v
@@ -12,16 +12,23 @@ These tests verify:
 4. app.frontend_management mock does NOT overwrite an existing entry
 5. CUDA mock guard: patch is applied only when cuda.is_available() is False
 6. CUDA mock guard: real cuda is left untouched when is_available() is True
+7. _check_node_structural: accepts a valid __init__.py
+8. _check_node_structural: raises FileNotFoundError when __init__.py is absent
+9. _check_node_structural: raises PyCompileError on syntax error
+10. check_node_imports: KJNodes/VHS route through _check_node_structural, others don't
 """
 
 import collections
+import py_compile
 import sys
+import tempfile
 import types
 import importlib
 import importlib.util
 import pathlib
 import unittest
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +267,82 @@ class TestServerMock(unittest.TestCase):
         # On GPU path the lambda replacements are never written;
         # mem_get_info stays as the original MagicMock.
         self.assertIsInstance(torch_mock.cuda.mem_get_info, MagicMock)
+
+
+class TestStructuralCheck(unittest.TestCase):
+    """Tests for _check_node_structural() and its routing in check_node_imports()."""
+
+    def _get_fn(self):
+        """Return _check_node_structural from a fresh module load."""
+        return _load_fresh()._check_node_structural
+
+    # ------ _check_node_structural unit tests ------
+
+    def test_structural_accepts_valid_init(self):
+        """_check_node_structural passes silently for a syntactically valid __init__.py."""
+        fn = self._get_fn()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node_dir = Path(tmpdir)
+            (node_dir / "__init__.py").write_text("# valid\npass\n", encoding="utf-8")
+            # Should not raise.
+            fn(node_dir)
+
+    def test_structural_raises_file_not_found_when_init_missing(self):
+        """_check_node_structural raises FileNotFoundError when __init__.py is absent."""
+        fn = self._get_fn()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node_dir = Path(tmpdir)
+            # No __init__.py created.
+            with self.assertRaises(FileNotFoundError):
+                fn(node_dir)
+
+    def test_structural_raises_on_syntax_error(self):
+        """_check_node_structural raises py_compile.PyCompileError on broken syntax."""
+        fn = self._get_fn()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node_dir = Path(tmpdir)
+            (node_dir / "__init__.py").write_text(
+                "def broken(\n    # missing closing paren and body\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(py_compile.PyCompileError):
+                fn(node_dir)
+
+    # ------ routing test ------
+
+    def test_check_node_imports_routes_structural_for_kjnodes_and_vhs(self):
+        """KJNodes and VHS call _check_node_structural; all other nodes call _import_node_by_path."""
+        ci = _load_fresh()
+
+        structural_calls: list[str] = []
+        import_calls: list[str] = []
+
+        def fake_structural(node_dir):
+            structural_calls.append(node_dir.name)
+
+        def fake_import(node_dir_name):
+            import_calls.append(node_dir_name)
+
+        with (
+            patch.object(ci, "_check_node_structural", side_effect=fake_structural),
+            patch.object(ci, "_import_node_by_path", side_effect=fake_import),
+        ):
+            ci.check_node_imports([
+                "ComfyUI-KJNodes",
+                "ComfyUI-VideoHelperSuite",
+                "ComfyUI-WanVideoWrapper",
+                "ComfyUI-ReActor",
+            ])
+
+        self.assertIn("ComfyUI-KJNodes", structural_calls)
+        self.assertIn("ComfyUI-VideoHelperSuite", structural_calls)
+        self.assertNotIn("ComfyUI-KJNodes", import_calls)
+        self.assertNotIn("ComfyUI-VideoHelperSuite", import_calls)
+
+        self.assertIn("ComfyUI-WanVideoWrapper", import_calls)
+        self.assertIn("ComfyUI-ReActor", import_calls)
+        self.assertNotIn("ComfyUI-WanVideoWrapper", structural_calls)
+        self.assertNotIn("ComfyUI-ReActor", structural_calls)
 
 
 if __name__ == "__main__":
