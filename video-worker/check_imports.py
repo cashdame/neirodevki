@@ -223,6 +223,22 @@ def main() -> None:
         )
         torch.cuda.get_device_properties = lambda device=None: _MockDeviceProps
 
+        # comfy/model_management.py:241 calls mem_get_info(dev) at top-level import
+        # via _lazy_init → torch._C._cuda_init(), which fails with
+        # "Found no NVIDIA driver" on CI runners without GPU.
+        # Returns (free_bytes, total_bytes) — 16 GiB each keeps downstream
+        # memory-fraction calculations sane without hitting div-by-zero.
+        torch.cuda.mem_get_info = lambda *a, **kw: (16 << 30, 16 << 30)
+
+        # Prophylactic stubs for other lazy_init entry points that may be hit
+        # by transitive imports in custom nodes (e.g. controlnet_aux chain).
+        # Guard with hasattr so we don't shadow any real callable on a future
+        # torch version that adds these to the no-GPU path.
+        if not callable(getattr(torch.cuda, "is_initialized", None)):
+            torch.cuda.is_initialized = lambda: True
+        if not callable(getattr(torch.cuda, "device_count", None)):
+            torch.cuda.device_count = lambda: 1
+
     # --- Custom nodes ---
     node_failures = check_node_imports(NODE_MODULES)
 
