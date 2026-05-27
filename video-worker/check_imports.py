@@ -205,7 +205,13 @@ def main() -> None:
     # ------------------------------------------------------------------
     if "server" not in sys.modules:
         _server_stub = types.ModuleType("server")
-        _server_stub.PromptServer = types.SimpleNamespace(instance=None)
+        _server_stub.PromptServer = types.SimpleNamespace(
+            instance=types.SimpleNamespace(
+                prompt_queue=types.SimpleNamespace(),
+                send_sync=lambda *a, **kw: None,
+                loop=None,
+            )
+        )
         sys.modules["server"] = _server_stub
 
     if "app.frontend_management" not in sys.modules:
@@ -267,6 +273,21 @@ def main() -> None:
             torch.cuda.is_initialized = lambda: True
         if not callable(getattr(torch.cuda, "device_count", None)):
             torch.cuda.device_count = lambda: 1
+
+    # Preload the core ComfyUI 'nodes' module so that custom nodes that do
+    # 'from nodes import MAX_RESOLUTION' (e.g. KJNodes) pick up the real core
+    # module at /comfyui/nodes.py instead of any stray nodes.py shipped inside
+    # a custom-node directory (e.g. ComfyUI-ReActor ships its own nodes.py,
+    # which would win the import race if custom_nodes/ is on sys.path first).
+    try:
+        import nodes  # core ComfyUI nodes module — must be found at /comfyui/nodes.py
+        print(f"core nodes preloaded: {nodes.__file__}")
+    except Exception as e:
+        print(
+            f"WARNING: failed to preload core nodes module: {type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+        # Do not abort — some custom nodes may still succeed without it.
 
     # --- Custom nodes ---
     node_failures = check_node_imports(NODE_MODULES)

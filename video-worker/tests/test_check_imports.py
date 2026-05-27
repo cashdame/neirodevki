@@ -156,7 +156,7 @@ class TestServerMock(unittest.TestCase):
     # ------ server ------
 
     def test_server_mock_installed_when_absent(self):
-        """main() injects sys.modules['server'] with PromptServer.instance=None."""
+        """main() injects sys.modules['server'] with a rich PromptServer stub."""
         snapshot, _ = _run_main()
 
         server_mod = snapshot["server"]
@@ -165,10 +165,29 @@ class TestServerMock(unittest.TestCase):
             hasattr(server_mod, "PromptServer"),
             "stub must expose PromptServer attribute",
         )
-        self.assertIsNone(
+        self.assertIsNotNone(
             server_mod.PromptServer.instance,
-            "PromptServer.instance must be None in the stub",
+            "PromptServer.instance must not be None — VHS needs it",
         )
+
+    def test_server_mock_prompt_queue_exists(self):
+        """PromptServer.instance.prompt_queue must exist after mock injection."""
+        snapshot, _ = _run_main()
+
+        instance = snapshot["server"].PromptServer.instance
+        self.assertTrue(
+            hasattr(instance, "prompt_queue"),
+            "PromptServer.instance must expose prompt_queue (required by VHS)",
+        )
+
+    def test_server_mock_send_sync_callable_returns_none(self):
+        """PromptServer.instance.send_sync must be callable and return None."""
+        snapshot, _ = _run_main()
+
+        send_sync = snapshot["server"].PromptServer.instance.send_sync
+        self.assertTrue(callable(send_sync), "send_sync must be callable")
+        result = send_sync("event", {"data": 1}, sid="test")
+        self.assertIsNone(result, "send_sync stub must return None")
 
     def test_server_mock_does_not_overwrite_existing(self):
         """main() must NOT replace a pre-existing sys.modules['server']."""
