@@ -3,6 +3,9 @@ name: build-flux-worker
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "video-worker/**"
+      - ".github/workflows/build-video.yml"
   workflow_dispatch:
 
 jobs:

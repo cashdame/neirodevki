@@ -26,9 +26,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ---------------------------------------------------------------------------
 # Layer 2: core pip deps
-# Note: onnxruntime-gpu and einops are already present in the base image
-# (1.26.0 and 0.8.2 respectively). Pinning them here caused install conflicts
-# in EP1 testing — omitted intentionally.
+# onnxruntime-gpu pinned for insightface 0.7.3 + torch CUDA 12 compatibility.
+# CI iteration 2 confirmed it is NOT present in runpod/worker-comfyui:5.8.5-base.
 # ---------------------------------------------------------------------------
 RUN pip install --no-cache-dir \
       huggingface_hub \
@@ -36,7 +35,8 @@ RUN pip install --no-cache-dir \
       imageio-ffmpeg \
       av \
       onnx==1.16.1 \
-      timm==0.9.16
+      timm==0.9.16 \
+      "onnxruntime-gpu>=1.18.0,<2.0.0"
 
 # ---------------------------------------------------------------------------
 # Layer 3: insightface — needs build-essential from Layer 1
@@ -91,6 +91,22 @@ RUN git clone https://github.com/Gourieff/ComfyUI-ReActor \
     && git checkout 6ad6b35a4df250d14cb2abf0808c9ffedf59f747 \
     && rm -rf .git
 
+# kijai/ComfyUI-KJNodes @ 2ac0b25
+# Required by the Wan 2.2 i2v reference workflow (kijai-canonical wanvideo_2_2_I2V_A14B).
+RUN git clone https://github.com/kijai/ComfyUI-KJNodes \
+      /comfyui/custom_nodes/ComfyUI-KJNodes \
+    && cd /comfyui/custom_nodes/ComfyUI-KJNodes \
+    && git checkout 2ac0b25bbd96c2ad4f7744fb6814de563d4b8592 \
+    && rm -rf .git
+
+# Kosinkadink/ComfyUI-VideoHelperSuite @ 4ee72c0
+# VHS_LoadVideo + video export nodes used in the reference workflow.
+RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite \
+      /comfyui/custom_nodes/ComfyUI-VideoHelperSuite \
+    && cd /comfyui/custom_nodes/ComfyUI-VideoHelperSuite \
+    && git checkout 4ee72c065db22c9d96c2427954dc69e7b908444b \
+    && rm -rf .git
+
 # ---------------------------------------------------------------------------
 # Layer 5: pip requirements from custom nodes
 #
@@ -101,6 +117,8 @@ RUN git clone https://github.com/Gourieff/ComfyUI-ReActor \
 # controlnet_aux: has requirements.txt — contains onnxruntime-gpu which conflicts
 #                 with the version already in base. Strip it before install.
 # ReActor: has requirements.txt
+# KJNodes: has requirements.txt (pillow, color-matcher, matplotlib, mss, opencv-python-headless)
+# VideoHelperSuite: has requirements.txt (opencv-python, imageio-ffmpeg)
 # ---------------------------------------------------------------------------
 
 RUN pip install --no-cache-dir \
@@ -112,14 +130,19 @@ RUN pip install --no-cache-dir \
 RUN pip install --no-cache-dir \
       -r /comfyui/custom_nodes/ComfyUI-LatentSyncWrapper/requirements.txt
 
-# controlnet_aux: strip onnxruntime-gpu to avoid version conflict with base image.
-# The base already ships onnxruntime-gpu 1.26.0 which is newer and compatible.
+# controlnet_aux: strip onnxruntime-gpu — pinned in Layer 2; avoid double-install conflict.
 RUN grep -v "^onnxruntime" \
       /comfyui/custom_nodes/comfyui_controlnet_aux/requirements.txt \
     | pip install --no-cache-dir -r /dev/stdin
 
 RUN pip install --no-cache-dir \
       -r /comfyui/custom_nodes/ComfyUI-ReActor/requirements.txt
+
+RUN pip install --no-cache-dir \
+      -r /comfyui/custom_nodes/ComfyUI-KJNodes/requirements.txt
+
+RUN pip install --no-cache-dir \
+      -r /comfyui/custom_nodes/ComfyUI-VideoHelperSuite/requirements.txt
 
 # ---------------------------------------------------------------------------
 # Layer 6: smoke-test entrypoint (Phase A only)

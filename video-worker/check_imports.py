@@ -68,6 +68,8 @@ NODE_MODULES: list[str] = [
     "ComfyUI-LatentSyncWrapper",
     "comfyui_controlnet_aux",
     "ComfyUI-ReActor",
+    "ComfyUI-KJNodes",           # required by Wan 2.2 i2v reference workflow
+    "ComfyUI-VideoHelperSuite",  # VHS_LoadVideo + video export
     # "ComfyUI-SeedVR2_VideoUpscaler",  # triton GPU-only — verify on pod in Phase B
 ]
 
@@ -188,6 +190,20 @@ def main() -> None:
 
     # --- Core pip packages ---
     core_failures = check_core_imports(CORE_MODULES)
+
+    # CUDA mock for CI smoke-test (no GPU on GitHub runner).
+    # Lets ComfyUI's model_management.get_torch_device() pick CPU fallback
+    # instead of crashing on RuntimeError("Found no NVIDIA driver") when
+    # nodes like WanVideoWrapper import comfy.model_management at module load.
+    # On real RunPod worker torch.cuda.is_available() returns True and this
+    # patch is skipped — runtime behavior is identical to production.
+    # Imported here (after check_core_imports) so a missing torch is already
+    # reported above before we reach this point.
+    import torch
+    if not torch.cuda.is_available():
+        torch.cuda.is_available = lambda: False
+        torch.cuda.current_device = lambda: 0
+        torch.cuda.get_device_name = lambda device=None: "cpu-mock"
 
     # --- Custom nodes ---
     node_failures = check_node_imports(NODE_MODULES)

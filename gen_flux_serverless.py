@@ -31,9 +31,35 @@ parser.add_argument("seed", nargs="?", type=int, default=1234)
 parser.add_argument("width", nargs="?", type=int, default=768)
 parser.add_argument("height", nargs="?", type=int, default=1024)
 parser.add_argument("--endpoint", default=None, help="RunPod serverless endpoint ID")
+parser.add_argument("--ref-image", default=None,
+                    help="reference image -> ControlNet (transfer pose + clothing position)")
+parser.add_argument("--cn-strength", type=float, default=0.65, help="ControlNet strength (0.6-0.7)")
 ns = parser.parse_args()
 prompt, seed, W, H = ns.prompt, ns.seed, ns.width, ns.height
 endpoint = ns.endpoint
+ref_image, cn_strength = ns.ref_image, ns.cn_strength
+
+# Control image (canny edges) is computed LOCALLY (the comfyui_controlnet_aux
+# preprocessor nodes don't load in the worker image), then sent as base64. The
+# worker workflow uses only core ComfyUI ControlNet nodes. SetUnionControlNetType
+# valid types (from the live API): auto/openpose/depth/hed-pidi-scribble-ted/
+# canny-lineart-anime_lineart-mlsd/normal/segment/tile/repaint. Our edge map = canny.
+CN_MODE = "canny/lineart/anime_lineart/mlsd"
+REF_NAME = "ref_control.png"
+
+
+def make_canny(path):
+    """Canny-style edge map via Pillow (no cv2/torch): grayscale -> FIND_EDGES ->
+    autocontrast -> threshold to crisp white lines on black. Returns a temp PNG path."""
+    from PIL import Image, ImageFilter, ImageOps
+    im = Image.open(path).convert("L")
+    edges = ImageOps.autocontrast(im.filter(ImageFilter.FIND_EDGES))
+    edges = edges.point(lambda p: 255 if p > 40 else 0).convert("RGB")
+    import tempfile
+    fd, out = tempfile.mkstemp(suffix=".png", prefix="canny_")
+    os.close(fd)
+    edges.save(out)
+    return out
 
 # --- LoRA stack (mirrors gen_flux_pod.py) ------------------------------------
 LEILA_LORA = os.environ.get("LEILA_LORA", "leila_lora_v3.safetensors")
@@ -57,6 +83,11 @@ STEPS = int(os.environ.get("STEPS", "32"))
 SAMPLER = os.environ.get("SAMPLER", "dpmpp_2m")
 SCHEDULER = os.environ.get("SCHEDULER", "beta")
 OUT_TAG = os.environ.get("OUT_TAG", "")  # appended to filename to keep A/B apart
+# ControlNet end_percent: how late into denoising the control image keeps steering.
+# Lower (~0.5) = pose/composition is locked early but the LAST steps (where the face
+# forms) are driven by the LoRA -> identity stays Leila instead of drifting toward the
+# reference person's facial geometry. Only used on the --ref-image path.
+CN_END = float(os.environ.get("CN_END", "0.5"))
 
 
 def build_workflow():
@@ -84,8 +115,26 @@ def build_workflow():
     wf["3"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": [last, 1], "text": prompt}}
     wf["4"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": [last, 1], "text": ""}}
     wf["5"] = {"class_type": "FluxGuidance", "inputs": {"conditioning": ["3", 0], "guidance": 3.5}}
+
+    # ControlNet branch: depth/pose from a reference -> transfer pose + clothing
+    # position onto Leila. Only added when --ref-image is given; otherwise plain txt2img.
+    pos, neg = ["5", 0], ["4", 0]
+    if ref_image:
+        # Control image (canny) is already preprocessed locally -> feed straight in.
+        wf["10"] = {"class_type": "LoadImage", "inputs": {"image": REF_NAME}}
+        wf["12"] = {"class_type": "ControlNetLoader",
+                    "inputs": {"control_net_name": "flux_union_pro2.safetensors"}}
+        wf["13"] = {"class_type": "SetUnionControlNetType",
+                    "inputs": {"control_net": ["12", 0], "type": CN_MODE}}
+        wf["14"] = {"class_type": "ControlNetApplyAdvanced",
+                    "inputs": {"positive": ["5", 0], "negative": ["4", 0],
+                               "control_net": ["13", 0], "image": ["10", 0],
+                               "strength": cn_strength, "start_percent": 0.0,
+                               "end_percent": CN_END, "vae": ["1", 2]}}
+        pos, neg = ["14", 0], ["14", 1]
+
     wf["7"] = {"class_type": "KSampler",
-               "inputs": {"model": [last, 0], "positive": ["5", 0], "negative": ["4", 0],
+               "inputs": {"model": [last, 0], "positive": pos, "negative": neg,
                           "latent_image": ["6", 0], "seed": seed, "steps": STEPS, "cfg": 1.0,
                           "sampler_name": SAMPLER, "scheduler": SCHEDULER, "denoise": 1.0}}
     return wf
@@ -157,16 +206,30 @@ def main():
     key = load_key()
     base = f"https://api.runpod.ai/v2/{eid}"
 
-    print(f"Submitting to endpoint {eid} (seed={seed}, {W}x{H})...")
-    job = post(f"{base}/run", key, {"input": {"workflow": build_workflow()}})
+    job_input = {"workflow": build_workflow()}
+    canny_tmp = None
+    if ref_image:
+        canny_tmp = make_canny(ref_image)  # local edge map -> control image
+        with open(canny_tmp, "rb") as f:
+            job_input["images"] = [{"name": REF_NAME, "image": base64.b64encode(f.read()).decode()}]
+        print(f"Submitting to {eid} (seed={seed}, {W}x{H}, ControlNet canny "
+              f"@{cn_strength} from {os.path.basename(ref_image)})...")
+    else:
+        print(f"Submitting to endpoint {eid} (seed={seed}, {W}x{H})...")
+    job = post(f"{base}/run", key, {"input": job_input})
+    if canny_tmp:
+        os.remove(canny_tmp)
     job_id = job.get("id")
     if not job_id:
         sys.exit(f"No job id in response: {json.dumps(job)[:400]}")
 
     # Poll. Cold start (worker scaled to zero -> image pull + 17 GB into VRAM) can
-    # sit IN_QUEUE for several minutes; warm runs finish in seconds. ~15 min cap so
-    # a cold first request doesn't get dropped mid-spinup.
-    for i in range(450):  # up to ~15 min
+    # sit IN_QUEUE for several minutes; warm runs finish in seconds. Default ~15 min
+    # cap so a cold first request doesn't get dropped mid-spinup. POLL_ITERS raises it
+    # (e.g. for riding out GPU-throttle peaks where the job must stay queued for hours
+    # until a worker survives a full cold start and FlashBoot seeds its snapshot).
+    max_iters = int(os.environ.get("POLL_ITERS", "450"))
+    for i in range(max_iters):  # each iter ~2s
         try:
             st = get(f"{base}/status/{job_id}", key)
         except Exception as e:
