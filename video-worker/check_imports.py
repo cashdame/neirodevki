@@ -204,15 +204,62 @@ def main() -> None:
     # live module — production inference is unaffected.
     # ------------------------------------------------------------------
     if "server" not in sys.modules:
-        _server_stub = types.ModuleType("server")
-        _server_stub.PromptServer = types.SimpleNamespace(
-            instance=types.SimpleNamespace(
-                prompt_queue=types.SimpleNamespace(),
-                send_sync=lambda *a, **kw: None,
-                loop=None,
+        import importlib.util as _ilu
+
+        _server_path = "/comfyui/server.py"
+        if os.path.exists(_server_path):
+            # Load the real ComfyUI server module so KJNodes/VHS get the full
+            # aiohttp structure (app, router, router.frozen, web, …).
+            # PromptServer.__init__ builds web.Application() but never calls
+            # run_app() — no port is opened.
+            try:
+                _server_spec = _ilu.spec_from_file_location("server", _server_path)
+                _server_mod = _ilu.module_from_spec(_server_spec)
+                sys.modules["server"] = _server_mod          # register BEFORE exec
+                _server_spec.loader.exec_module(_server_mod)  # full ComfyUI server
+
+                # PromptServer.instance is None until first instantiation.
+                # Create a real instance so .app/.router/.web all work.
+                if (
+                    getattr(_server_mod, "PromptServer", None) is not None
+                    and _server_mod.PromptServer.instance is None
+                ):
+                    try:
+                        _server_mod.PromptServer(loop=None)
+                    except TypeError:
+                        # __init__ may require a real event loop — create one.
+                        import asyncio
+                        _loop = asyncio.new_event_loop()
+                        _server_mod.PromptServer(_loop)
+
+                print(f"core server preloaded: {_server_mod.__file__}")
+            except Exception as _e:
+                # If real server.py fails to load, fall back to the minimal stub.
+                print(
+                    f"WARNING: failed to load real server.py "
+                    f"({type(_e).__name__}: {_e}), falling back to stub",
+                    file=sys.stderr,
+                )
+                _server_stub = types.ModuleType("server")
+                _server_stub.PromptServer = types.SimpleNamespace(
+                    instance=types.SimpleNamespace(
+                        prompt_queue=types.SimpleNamespace(),
+                        send_sync=lambda *a, **kw: None,
+                        loop=None,
+                    )
+                )
+                sys.modules["server"] = _server_stub
+        else:
+            # /comfyui/server.py not present (local dev / pytest) — use SimpleNamespace stub.
+            _server_stub = types.ModuleType("server")
+            _server_stub.PromptServer = types.SimpleNamespace(
+                instance=types.SimpleNamespace(
+                    prompt_queue=types.SimpleNamespace(),
+                    send_sync=lambda *a, **kw: None,
+                    loop=None,
+                )
             )
-        )
-        sys.modules["server"] = _server_stub
+            sys.modules["server"] = _server_stub
 
     if "app.frontend_management" not in sys.modules:
         sys.modules["app.frontend_management"] = types.ModuleType(
