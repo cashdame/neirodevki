@@ -83,7 +83,7 @@ echo "entrypoint: wrote /comfyui/extra_model_paths.yaml (iter14)"
 # If COMFYUI_DIR already exists as an empty directory (created by base image),
 # remove it first so the symlink can be placed.
 # ---------------------------------------------------------------------------
-for MODEL_TYPE in diffusion_models text_encoders clip loras; do
+for MODEL_TYPE in diffusion_models text_encoders clip loras vae upscale_models clip_vision; do
     COMFYUI_DIR="/comfyui/models/${MODEL_TYPE}"
 
     # Try both populate layouts.
@@ -109,5 +109,7 @@ for MODEL_TYPE in diffusion_models text_encoders clip loras; do
         fi
     done
 done
+
+echo "entrypoint: loras dir contents -> $(ls /comfyui/models/loras/ 2>/dev/null | head -5 || echo MISSING)"
 
 exec /start.sh
