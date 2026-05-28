@@ -70,8 +70,11 @@ comfyui:
     vae: |
         /runpod-volume/models/vae/
         /runpod-volume/vae/
+    loras: |
+        /runpod-volume/models/loras/
+        /runpod-volume/loras/
 YAML
-echo "entrypoint: wrote /comfyui/extra_model_paths.yaml (iter13)"
+echo "entrypoint: wrote /comfyui/extra_model_paths.yaml (iter14)"
 
 # ---------------------------------------------------------------------------
 # Symlink approach as belt-and-suspenders: also create symlinks if the volume
@@ -80,7 +83,7 @@ echo "entrypoint: wrote /comfyui/extra_model_paths.yaml (iter13)"
 # If COMFYUI_DIR already exists as an empty directory (created by base image),
 # remove it first so the symlink can be placed.
 # ---------------------------------------------------------------------------
-for MODEL_TYPE in diffusion_models text_encoders clip; do
+for MODEL_TYPE in diffusion_models text_encoders clip loras; do
     COMFYUI_DIR="/comfyui/models/${MODEL_TYPE}"
 
     # Try both populate layouts.
