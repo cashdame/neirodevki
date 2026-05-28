@@ -9,6 +9,12 @@
 # This fixes the EP1 Critical: silent 10-min timeout on broken dependencies.
 set -euo pipefail
 
+# CI smoke-only mode: run imports check and exit without starting the RunPod worker.
+if [ "${SMOKE_TEST_ONLY:-0}" = "1" ]; then
+    python /check_imports.py
+    exit $?
+fi
+
 CHECK_STDERR=$(mktemp)
 
 if ! python /check_imports.py 2>"${CHECK_STDERR}"; then

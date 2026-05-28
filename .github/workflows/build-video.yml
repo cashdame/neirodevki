@@ -47,4 +47,4 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Smoke test imports
-        run: docker run --rm ghcr.io/cashdame/neirodevki-video:${{ github.sha }}
+        run: docker run --rm -e SMOKE_TEST_ONLY=1 ghcr.io/cashdame/neirodevki-video:${{ github.sha }}
