@@ -73,6 +73,9 @@ comfyui:
     loras: |
         /runpod-volume/models/loras/
         /runpod-volume/loras/
+    detection: |
+        /runpod-volume/models/detection/
+        /runpod-volume/detection/
 YAML
 echo "entrypoint: wrote /comfyui/extra_model_paths.yaml (iter14)"
 
@@ -83,7 +86,7 @@ echo "entrypoint: wrote /comfyui/extra_model_paths.yaml (iter14)"
 # If COMFYUI_DIR already exists as an empty directory (created by base image),
 # remove it first so the symlink can be placed.
 # ---------------------------------------------------------------------------
-for MODEL_TYPE in diffusion_models text_encoders clip loras vae upscale_models clip_vision; do
+for MODEL_TYPE in diffusion_models text_encoders clip loras vae upscale_models clip_vision detection; do
     COMFYUI_DIR="/comfyui/models/${MODEL_TYPE}"
 
     # Try both populate layouts.
@@ -111,6 +114,19 @@ for MODEL_TYPE in diffusion_models text_encoders clip loras vae upscale_models c
 done
 
 echo "entrypoint: loras dir contents -> $(ls /comfyui/models/loras/ 2>/dev/null | head -5 || echo MISSING)"
+
+# iter18: symlink RIFE checkpoint for Frame-Interpolation plugin.
+# Plugin reads ckpts from /comfyui/custom_nodes/ComfyUI-Frame-Interpolation/ckpts/rife/
+# Volume has it at /runpod-volume/models/upscale_models/rife/rife49.pth
+FI_CKPTS=/comfyui/custom_nodes/ComfyUI-Frame-Interpolation/ckpts
+VOL_RIFE=/runpod-volume/models/upscale_models/rife
+if [ -d "${VOL_RIFE}" ]; then
+    mkdir -p "${FI_CKPTS}"
+    if [ ! -e "${FI_CKPTS}/rife" ]; then
+        ln -s "${VOL_RIFE}" "${FI_CKPTS}/rife"
+        echo "entrypoint: linked Frame-Interpolation ckpts/rife -> ${VOL_RIFE}"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # iter16: patch rp_upload.py in-place to honor BUCKET_NAME env var.
