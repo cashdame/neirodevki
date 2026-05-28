@@ -112,4 +112,42 @@ done
 
 echo "entrypoint: loras dir contents -> $(ls /comfyui/models/loras/ 2>/dev/null | head -5 || echo MISSING)"
 
+# ---------------------------------------------------------------------------
+# iter15: monkey-patch runpod rp_upload to honor BUCKET_NAME env var.
+#
+# Stock rp_upload.upload_image() falls back to time.strftime("%m-%y") (e.g.
+# "05-26") if bucket_name is not passed by the handler — and worker-comfyui's
+# handler doesn't pass it. Since B2/S3 bucket names must be >=6 chars and
+# globally unique, we can't simply use "05-26".
+#
+# This sitecustomize.py is auto-imported by every Python process at startup
+# and wraps upload_image to default to os.environ["BUCKET_NAME"].
+# ---------------------------------------------------------------------------
+SITE_DIR=$(python -c "import site; print(site.getsitepackages()[0])")
+cat > "${SITE_DIR}/sitecustomize.py" << 'PYEOF'
+import os
+try:
+    from runpod.serverless.utils import rp_upload as _rpu
+    _orig_upload_image = _rpu.upload_image
+    _orig_upload_file_to_bucket = getattr(_rpu, "upload_file_to_bucket", None)
+    _orig_upload_in_memory_object = getattr(_rpu, "upload_in_memory_object", None)
+    _bucket = os.environ.get("BUCKET_NAME")
+    if _bucket:
+        def _patched_upload_image(job_id, image_location, result_index=0, results_list=None, bucket_name=None):
+            return _orig_upload_image(job_id, image_location, result_index, results_list, bucket_name or _bucket)
+        _rpu.upload_image = _patched_upload_image
+        if _orig_upload_file_to_bucket:
+            def _patched_upload_file_to_bucket(file_name, file_location, bucket_creds=None, bucket_name=None, prefix=None, extra_args=None):
+                return _orig_upload_file_to_bucket(file_name, file_location, bucket_creds, bucket_name or _bucket, prefix, extra_args)
+            _rpu.upload_file_to_bucket = _patched_upload_file_to_bucket
+        if _orig_upload_in_memory_object:
+            def _patched_upload_in_memory_object(file_name, file_data, bucket_creds=None, bucket_name=None, prefix=None):
+                return _orig_upload_in_memory_object(file_name, file_data, bucket_creds, bucket_name or _bucket, prefix)
+            _rpu.upload_in_memory_object = _patched_upload_in_memory_object
+        print(f"sitecustomize: patched rp_upload to use BUCKET_NAME={_bucket}", flush=True)
+except Exception as _e:
+    print(f"sitecustomize: failed to patch rp_upload: {_e}", flush=True)
+PYEOF
+echo "entrypoint: wrote ${SITE_DIR}/sitecustomize.py (iter15)"
+
 exec /start.sh
