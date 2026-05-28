@@ -34,4 +34,27 @@ fi
 
 rm -f "${CHECK_STDERR}"
 
+# ---------------------------------------------------------------------------
+# Symlink volume model folders that worker-comfyui:5.8.5-base does not include
+# in its extra_model_paths.yaml by default.
+#
+# worker-comfyui adds /runpod-volume/models/{checkpoints,loras,vae,...} but
+# NOT diffusion_models, text_encoders, or clip — required by WanVideoModelLoader
+# and LoadWanVideoT5TextEncoder respectively.
+#
+# The symlinks make ComfyUI's local folder_paths scan discover the volume files
+# without any changes to extra_model_paths.yaml.
+#
+# If the volume isn't mounted (edge case), the symlinks point at missing dirs;
+# ComfyUI gracefully returns an empty list — same as before this fix.
+# ---------------------------------------------------------------------------
+for MODEL_TYPE in diffusion_models text_encoders clip; do
+    VOLUME_DIR="/runpod-volume/models/${MODEL_TYPE}"
+    COMFYUI_DIR="/comfyui/models/${MODEL_TYPE}"
+    if [ -d "${VOLUME_DIR}" ] && [ ! -e "${COMFYUI_DIR}" ]; then
+        ln -s "${VOLUME_DIR}" "${COMFYUI_DIR}"
+        echo "entrypoint: linked ${COMFYUI_DIR} -> ${VOLUME_DIR}"
+    fi
+done
+
 exec /start.sh
