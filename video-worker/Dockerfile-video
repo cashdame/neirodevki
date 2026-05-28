@@ -107,6 +107,21 @@ RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite \
     && git checkout 4ee72c065db22c9d96c2427954dc69e7b908444b \
     && rm -rf .git
 
+# kijai/ComfyUI-WanAnimatePreprocess @ 0e0b6a2
+# Provides OnnxDetectionModelLoader, PoseAndFaceDetection, DrawViTPose,
+# WanAnimateToVideo nodes for the Animate (motion-transfer) pipeline.
+#
+# opencv-python conflict: requirements.txt lists `opencv-python`, but we
+# already have opencv-python-headless (from KJNodes / controlnet_aux).
+# Do NOT run `pip install -r requirements.txt` here — it would install
+# the conflicting GUI variant. The real runtime deps (onnx, onnxruntime-gpu,
+# cv2) are already satisfied by Layer 2 and earlier custom-node installs.
+RUN git clone https://github.com/kijai/ComfyUI-WanAnimatePreprocess \
+      /comfyui/custom_nodes/ComfyUI-WanAnimatePreprocess \
+    && cd /comfyui/custom_nodes/ComfyUI-WanAnimatePreprocess \
+    && git checkout 0e0b6a2a555625acf4d4aefb780e27d06937132f \
+    && rm -rf .git
+
 # ---------------------------------------------------------------------------
 # Layer 5: pip requirements from custom nodes
 #
@@ -119,6 +134,7 @@ RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite \
 # ReActor: has requirements.txt
 # KJNodes: has requirements.txt (pillow, color-matcher, matplotlib, mss, opencv-python-headless)
 # VideoHelperSuite: has requirements.txt (opencv-python, imageio-ffmpeg)
+# WanAnimatePreprocess: requirements intentionally NOT installed here — see note above.
 # ---------------------------------------------------------------------------
 
 RUN pip install --no-cache-dir \

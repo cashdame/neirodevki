@@ -70,8 +70,9 @@ NODE_MODULES: list[str] = [
     "ComfyUI-LatentSyncWrapper",
     "comfyui_controlnet_aux",
     "ComfyUI-ReActor",
-    "ComfyUI-KJNodes",           # required by Wan 2.2 i2v reference workflow
-    "ComfyUI-VideoHelperSuite",  # VHS_LoadVideo + video export
+    "ComfyUI-KJNodes",                 # required by Wan 2.2 i2v reference workflow
+    "ComfyUI-VideoHelperSuite",        # VHS_LoadVideo + video export
+    "ComfyUI-WanAnimatePreprocess",    # iter17: OnnxDetectionModelLoader + PoseAndFaceDetection + DrawViTPose
     # "ComfyUI-SeedVR2_VideoUpscaler",  # triton GPU-only — verify on pod in Phase B
 ]
 
@@ -86,6 +87,10 @@ NODE_MODULES: list[str] = [
 _STRUCTURAL_ONLY: frozenset[str] = frozenset({
     "ComfyUI-KJNodes",
     "ComfyUI-VideoHelperSuite",
+    # WanAnimatePreprocess nodes.py imports cv2, torch, and comfy.model_management
+    # at module level — requires GPU + full ComfyUI server init. Syntax-only check
+    # on CI; full load happens at ComfyUI startup on the RunPod worker.
+    "ComfyUI-WanAnimatePreprocess",
 })
 
 
