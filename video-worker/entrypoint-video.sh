@@ -113,41 +113,25 @@ done
 echo "entrypoint: loras dir contents -> $(ls /comfyui/models/loras/ 2>/dev/null | head -5 || echo MISSING)"
 
 # ---------------------------------------------------------------------------
-# iter15: monkey-patch runpod rp_upload to honor BUCKET_NAME env var.
+# iter16: patch rp_upload.py in-place to honor BUCKET_NAME env var.
 #
-# Stock rp_upload.upload_image() falls back to time.strftime("%m-%y") (e.g.
-# "05-26") if bucket_name is not passed by the handler — and worker-comfyui's
-# handler doesn't pass it. Since B2/S3 bucket names must be >=6 chars and
-# globally unique, we can't simply use "05-26".
+# Stock rp_upload uses time.strftime("%m-%y") (e.g. "05-26") if no
+# bucket_name is passed — and worker-comfyui's handler doesn't pass one.
+# B2 bucket names must be >=6 chars + globally unique, so we can't use "05-26".
 #
-# This sitecustomize.py is auto-imported by every Python process at startup
-# and wraps upload_image to default to os.environ["BUCKET_NAME"].
+# iter15 attempted sitecustomize.py monkey-patch but handler didn't pick it up.
+# This direct sed-patch on rp_upload.py is the simplest reliable fix.
 # ---------------------------------------------------------------------------
-SITE_DIR=$(python -c "import site; print(site.getsitepackages()[0])")
-cat > "${SITE_DIR}/sitecustomize.py" << 'PYEOF'
-import os
-try:
-    from runpod.serverless.utils import rp_upload as _rpu
-    _orig_upload_image = _rpu.upload_image
-    _orig_upload_file_to_bucket = getattr(_rpu, "upload_file_to_bucket", None)
-    _orig_upload_in_memory_object = getattr(_rpu, "upload_in_memory_object", None)
-    _bucket = os.environ.get("BUCKET_NAME")
-    if _bucket:
-        def _patched_upload_image(job_id, image_location, result_index=0, results_list=None, bucket_name=None):
-            return _orig_upload_image(job_id, image_location, result_index, results_list, bucket_name or _bucket)
-        _rpu.upload_image = _patched_upload_image
-        if _orig_upload_file_to_bucket:
-            def _patched_upload_file_to_bucket(file_name, file_location, bucket_creds=None, bucket_name=None, prefix=None, extra_args=None):
-                return _orig_upload_file_to_bucket(file_name, file_location, bucket_creds, bucket_name or _bucket, prefix, extra_args)
-            _rpu.upload_file_to_bucket = _patched_upload_file_to_bucket
-        if _orig_upload_in_memory_object:
-            def _patched_upload_in_memory_object(file_name, file_data, bucket_creds=None, bucket_name=None, prefix=None):
-                return _orig_upload_in_memory_object(file_name, file_data, bucket_creds, bucket_name or _bucket, prefix)
-            _rpu.upload_in_memory_object = _patched_upload_in_memory_object
-        print(f"sitecustomize: patched rp_upload to use BUCKET_NAME={_bucket}", flush=True)
-except Exception as _e:
-    print(f"sitecustomize: failed to patch rp_upload: {_e}", flush=True)
-PYEOF
-echo "entrypoint: wrote ${SITE_DIR}/sitecustomize.py (iter15)"
+RP_UPLOAD=$(python -c "from runpod.serverless.utils import rp_upload; print(rp_upload.__file__)" 2>/dev/null)
+if [ -n "${RP_UPLOAD}" ] && [ -f "${RP_UPLOAD}" ]; then
+    # Replace the two default-bucket-name lines with BUCKET_NAME env fallback.
+    # Both occurrences use the same time.strftime pattern.
+    sed -i 's|bucket_name = time\.strftime("%m-%y")|bucket_name = os.environ.get("BUCKET_NAME") or time.strftime("%m-%y")|g' "${RP_UPLOAD}"
+    sed -i 's|bucket = bucket_name if bucket_name else time\.strftime("%m-%y")|bucket = bucket_name if bucket_name else (os.environ.get("BUCKET_NAME") or time.strftime("%m-%y"))|g' "${RP_UPLOAD}"
+    echo "entrypoint: patched ${RP_UPLOAD} (iter16, BUCKET_NAME fallback)"
+    grep -n "BUCKET_NAME" "${RP_UPLOAD}" | head -5
+else
+    echo "entrypoint: WARN — could not locate rp_upload.py" >&2
+fi
 
 exec /start.sh
