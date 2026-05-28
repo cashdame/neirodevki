@@ -35,26 +35,76 @@ fi
 rm -f "${CHECK_STDERR}"
 
 # ---------------------------------------------------------------------------
-# Symlink volume model folders that worker-comfyui:5.8.5-base does not include
-# in its extra_model_paths.yaml by default.
+# iter13: write extra_model_paths.yaml so ComfyUI discovers Wan models on the
+# network volume.
 #
-# worker-comfyui adds /runpod-volume/models/{checkpoints,loras,vae,...} but
-# NOT diffusion_models, text_encoders, or clip — required by WanVideoModelLoader
-# and LoadWanVideoT5TextEncoder respectively.
+# worker-comfyui:5.8.5-base ships its own extra_model_paths.yaml that covers
+# checkpoints, loras, vae, etc., but NOT diffusion_models, text_encoders, or
+# clip — all three are required by WanVideoModelLoader and its T5 text encoder.
 #
-# The symlinks make ComfyUI's local folder_paths scan discover the volume files
-# without any changes to extra_model_paths.yaml.
+# extra_model_paths.yaml is read by ComfyUI at startup, after RunPod mounts the
+# network volume. This is more reliable than symlinks created before the volume
+# is mounted (the previous approach: symlinks were silently skipped when
+# VOLUME_DIR did not yet exist at entrypoint startup time).
 #
-# If the volume isn't mounted (edge case), the symlinks point at missing dirs;
-# ComfyUI gracefully returns an empty list — same as before this fix.
+# Two base paths are probed to cover both populate layouts:
+#   - /runpod-volume/models/<type>/  (default: MODELS_ROOT=/runpod-volume/models)
+#   - /runpod-volume/<type>/         (fallback: MODELS_ROOT=/runpod-volume)
+# ComfyUI merges paths from all entries, so listing both is harmless even when
+# one of them doesn't exist.
+# ---------------------------------------------------------------------------
+cat > /comfyui/extra_model_paths.yaml << 'YAML'
+comfyui:
+    diffusion_models: |
+        /runpod-volume/models/diffusion_models/
+        /runpod-volume/diffusion_models/
+    text_encoders: |
+        /runpod-volume/models/text_encoders/
+        /runpod-volume/text_encoders/
+    clip: |
+        /runpod-volume/models/clip/
+        /runpod-volume/clip/
+    clip_vision: |
+        /runpod-volume/models/clip_vision/
+        /runpod-volume/clip_vision/
+    vae: |
+        /runpod-volume/models/vae/
+        /runpod-volume/vae/
+YAML
+echo "entrypoint: wrote /comfyui/extra_model_paths.yaml (iter13)"
+
+# ---------------------------------------------------------------------------
+# Symlink approach as belt-and-suspenders: also create symlinks if the volume
+# directory exists and the ComfyUI target does not yet exist as a real dir.
+#
+# If COMFYUI_DIR already exists as an empty directory (created by base image),
+# remove it first so the symlink can be placed.
 # ---------------------------------------------------------------------------
 for MODEL_TYPE in diffusion_models text_encoders clip; do
-    VOLUME_DIR="/runpod-volume/models/${MODEL_TYPE}"
     COMFYUI_DIR="/comfyui/models/${MODEL_TYPE}"
-    if [ -d "${VOLUME_DIR}" ] && [ ! -e "${COMFYUI_DIR}" ]; then
-        ln -s "${VOLUME_DIR}" "${COMFYUI_DIR}"
-        echo "entrypoint: linked ${COMFYUI_DIR} -> ${VOLUME_DIR}"
-    fi
+
+    # Try both populate layouts.
+    for CANDIDATE in \
+        "/runpod-volume/models/${MODEL_TYPE}" \
+        "/runpod-volume/${MODEL_TYPE}"; do
+
+        if [ -d "${CANDIDATE}" ]; then
+            VOLUME_DIR="${CANDIDATE}"
+            # Remove empty placeholder dir if present (base image creates these).
+            if [ -d "${COMFYUI_DIR}" ] && [ ! -L "${COMFYUI_DIR}" ]; then
+                # Only remove if empty — don't silently nuke real content.
+                if [ -z "$(ls -A "${COMFYUI_DIR}" 2>/dev/null)" ]; then
+                    rmdir "${COMFYUI_DIR}"
+                fi
+            fi
+            # Create symlink if target slot is free.
+            if [ ! -e "${COMFYUI_DIR}" ]; then
+                ln -s "${VOLUME_DIR}" "${COMFYUI_DIR}"
+                echo "entrypoint: linked ${COMFYUI_DIR} -> ${VOLUME_DIR}"
+            fi
+            break
+        fi
+    done
 done
 
 exec /start.sh
