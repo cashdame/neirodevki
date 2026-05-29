@@ -20,6 +20,16 @@ Architecture notes (Section 1 of EP2 spec):
                    Fill in real paths after GET /object_info on the ComfyUI
                    instance confirms which modules each node exposes
                    (pod-stand TODO Phase B).
+
+ABI compatibility guard (iter21):
+  After importing torch and torchvision, their versions are printed to stdout
+  so they appear in both CI logs and RunPod worker startup logs.
+  Major.minor compatibility is checked against a known-good matrix:
+    torch 2.6 → torchvision 0.21
+    torch 2.7 → torchvision 0.22
+    torch 2.8 → torchvision 0.23
+  Mismatch → exit(1) with a clear message (catches ABI breakage on CPU before
+  a GPU job runs).  Unknown torch version → warning only (forward-compat).
 """
 
 import importlib
@@ -174,6 +184,81 @@ def _import_node_by_path(node_dir_name: str):
     sys.modules[module_key] = module
     spec.loader.exec_module(module)
     return module
+
+
+# ---------------------------------------------------------------------------
+# torch ↔ torchvision ABI compatibility matrix (major.minor → tv major.minor)
+# Source: https://github.com/pytorch/vision#installation
+# ---------------------------------------------------------------------------
+_TORCH_TV_COMPAT: dict[tuple[int, int], tuple[int, int]] = {
+    (2, 6): (0, 21),
+    (2, 7): (0, 22),
+    (2, 8): (0, 23),
+}
+
+
+def check_torchvision_abi() -> None:
+    """Print torch and torchvision versions, then validate ABI compatibility.
+
+    Prints both versions to stdout so they appear in CI logs and RunPod
+    worker startup logs for future diagnostics.
+
+    Raises:
+        SystemExit(1): If torch and torchvision major.minor are in
+            _TORCH_TV_COMPAT and do not match the expected pair.
+            Unknown torch version → prints a warning but does NOT exit
+            (forward-compatibility: new releases should not break CI).
+    """
+    import torch
+    import torchvision
+
+    tv_ver = torchvision.__version__
+    t_ver = torch.__version__
+
+    # Always print both versions — visible in CI log and worker startup log.
+    print(f"torch={t_ver} torchvision={tv_ver}", flush=True)
+
+    # Parse major.minor, ignoring pre-release suffixes (e.g. "2.6.0+cu126").
+    def _parse_major_minor(ver_str: str) -> tuple[int, int] | None:
+        parts = ver_str.split("+")[0].split(".")
+        try:
+            return (int(parts[0]), int(parts[1]))
+        except (IndexError, ValueError):
+            return None
+
+    torch_mm = _parse_major_minor(t_ver)
+    tv_mm = _parse_major_minor(tv_ver)
+
+    if torch_mm is None or tv_mm is None:
+        print(
+            f"WARNING: check_torchvision_abi: cannot parse versions "
+            f"torch={t_ver!r} torchvision={tv_ver!r} — skipping ABI check.",
+            file=sys.stderr,
+        )
+        return
+
+    expected_tv = _TORCH_TV_COMPAT.get(torch_mm)
+    if expected_tv is None:
+        # torch version not in our matrix — new release or custom build.
+        # Warn but do not fail to avoid breaking CI on future torch versions.
+        print(
+            f"WARNING: check_torchvision_abi: torch {t_ver} not in ABI matrix — "
+            f"skipping compatibility check (add entry to _TORCH_TV_COMPAT if needed).",
+            file=sys.stderr,
+        )
+        return
+
+    if tv_mm != expected_tv:
+        print(
+            f"FATAL: torchvision ABI mismatch — "
+            f"torch {t_ver} requires torchvision {expected_tv[0]}.{expected_tv[1]}.x "
+            f"but found torchvision {tv_ver}. "
+            f"This causes CUDA ABI breakage at runtime (seen in iter20). "
+            f"Do NOT reinstall torchvision separately — use the version from "
+            f"runpod/worker-comfyui base image.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +450,11 @@ def main() -> None:
             torch.cuda.is_initialized = lambda: True
         if not callable(getattr(torch.cuda, "device_count", None)):
             torch.cuda.device_count = lambda: 1
+
+    # Print torch + torchvision versions and validate ABI compatibility.
+    # Exits with code 1 on known-bad version pair (e.g. torch 2.6 + tv 0.20).
+    # Safe to run after CUDA mock so torch is importable on CPU-only CI runners.
+    check_torchvision_abi()
 
     # Preload the core ComfyUI 'nodes' module so that custom nodes that do
     # 'from nodes import MAX_RESOLUTION' (e.g. KJNodes) pick up the real core

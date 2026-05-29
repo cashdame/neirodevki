@@ -422,5 +422,91 @@ class TestNodeRegistrationCheck(unittest.TestCase):
         )
 
 
+class TestTorchvisionAbi(unittest.TestCase):
+    """Tests for check_torchvision_abi() — version printing and ABI guard."""
+
+    def _get_fn(self):
+        """Return check_torchvision_abi from a fresh module load."""
+        return _load_fresh().check_torchvision_abi
+
+    def _make_tv_mock(self, torch_ver: str, tv_ver: str):
+        """Return (torch_mock, torchvision_mock) stubs with given version strings."""
+        torch_mock = MagicMock()
+        torch_mock.__version__ = torch_ver
+        tv_mock = MagicMock()
+        tv_mock.__version__ = tv_ver
+        return torch_mock, tv_mock
+
+    def _call_abi(self, torch_ver: str, tv_ver: str):
+        """
+        Call check_torchvision_abi() with mocked torch/torchvision versions.
+
+        Returns (exit_code_or_None, stdout_text, stderr_text).
+        exit_code_or_None is None if the function returns normally (no SystemExit).
+        """
+        fn = self._get_fn()
+        torch_mock, tv_mock = self._make_tv_mock(torch_ver, tv_ver)
+        import io
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+
+        with (
+            _ModuleGuard("torch", torch_mock),
+            _ModuleGuard("torchvision", tv_mock),
+            patch("sys.stdout", stdout_capture),
+            patch("sys.stderr", stderr_capture),
+        ):
+            try:
+                fn()
+                return None, stdout_capture.getvalue(), stderr_capture.getvalue()
+            except SystemExit as e:
+                return e.code, stdout_capture.getvalue(), stderr_capture.getvalue()
+
+    def test_prints_both_versions_on_success(self):
+        """check_torchvision_abi prints 'torch=X torchvision=Y' on compatible pair."""
+        code, stdout, _stderr = self._call_abi("2.6.0+cu126", "0.21.0+cu126")
+        self.assertIsNone(code, "Compatible pair must not exit")
+        self.assertIn("torch=", stdout)
+        self.assertIn("torchvision=", stdout)
+        self.assertIn("2.6.0", stdout)
+        self.assertIn("0.21.0", stdout)
+
+    def test_compatible_pair_passes(self):
+        """Known-good pairs in _TORCH_TV_COMPAT pass without exit."""
+        pairs = [
+            ("2.6.0", "0.21.0"),
+            ("2.7.0", "0.22.0"),
+            ("2.8.0", "0.23.0"),
+        ]
+        for t_ver, tv_ver in pairs:
+            with self.subTest(torch=t_ver, tv=tv_ver):
+                code, _stdout, _stderr = self._call_abi(t_ver, tv_ver)
+                self.assertIsNone(code, f"Pair torch={t_ver} tv={tv_ver} must pass")
+
+    def test_mismatch_exits_with_1(self):
+        """ABI mismatch (torch 2.6 + tv 0.20) must exit(1) with a descriptive message."""
+        code, _stdout, stderr = self._call_abi("2.6.0", "0.20.0")
+        self.assertEqual(code, 1, "ABI mismatch must exit with code 1")
+        self.assertIn("mismatch", stderr.lower(), "stderr must contain 'mismatch'")
+        self.assertIn("0.21", stderr, "stderr must mention the expected torchvision version")
+
+    def test_unknown_torch_version_warns_not_fails(self):
+        """Torch version absent from matrix → warning to stderr, no exit."""
+        code, _stdout, stderr = self._call_abi("3.0.0", "0.25.0")
+        self.assertIsNone(code, "Unknown torch version must not cause exit")
+        self.assertIn("WARNING", stderr, "Must print WARNING for unknown torch version")
+
+    def test_cu_suffix_stripped_for_comparison(self):
+        """Versions like '2.6.0+cu126' and '0.21.0+cu126' must be parsed correctly."""
+        code, _stdout, _stderr = self._call_abi("2.6.0+cu126", "0.21.0+cu126")
+        self.assertIsNone(code, "cu-suffixed compatible pair must pass")
+
+    def test_mismatch_with_cu_suffix(self):
+        """'2.6.0+cu126' + '0.20.0+cu126' is still a mismatch — suffix must not confuse parser."""
+        code, _stdout, stderr = self._call_abi("2.6.0+cu126", "0.20.0+cu126")
+        self.assertEqual(code, 1, "cu-suffixed mismatch must still exit(1)")
+        self.assertIn("mismatch", stderr.lower())
+
+
 if __name__ == "__main__":
     unittest.main()
