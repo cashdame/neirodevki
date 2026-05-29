@@ -93,6 +93,22 @@ _STRUCTURAL_ONLY: frozenset[str] = frozenset({
     "ComfyUI-WanAnimatePreprocess",
 })
 
+# ---------------------------------------------------------------------------
+# Post-import NODE_CLASS_MAPPINGS registration checks.
+#
+# Maps node directory name → list of expected keys that MUST appear in the
+# module's NODE_CLASS_MAPPINGS after a successful live import.  A missing key
+# means the node failed to register silently (e.g. a missing dep caused an
+# inner ImportError that was swallowed by the node's own try/except).
+#
+# "RIFE VFI" key is confirmed in __init__.py at SHA 26545cc.  If this key is
+# absent after import, the RIFE_VFI deps (packaging, torchvision, scipy, kornia)
+# are likely missing — fail fast here rather than on a GPU job.
+# ---------------------------------------------------------------------------
+_NODE_REGISTRATION_CHECKS: dict[str, list[str]] = {
+    "ComfyUI-Frame-Interpolation": ["RIFE VFI"],
+}
+
 
 def _check_node_structural(node_dir: Path) -> None:
     """Verify __init__.py exists and is syntactically valid Python, without executing it.
@@ -189,6 +205,9 @@ def check_node_imports(node_dirs: list[str]) -> list[tuple[str, str]]:
     PromptServer that cannot be reproduced on a GPU-less CI runner.
 
     All other nodes are verified via _import_node_by_path() (live import).
+    After a successful live import, nodes listed in _NODE_REGISTRATION_CHECKS are
+    additionally checked for required keys in their NODE_CLASS_MAPPINGS.  A missing
+    key raises ImportError so the failure surfaces at build time, not on a GPU job.
 
     Returns:
         List of (node_dir_name, traceback_str) for each failure.
@@ -199,7 +218,26 @@ def check_node_imports(node_dirs: list[str]) -> list[tuple[str, str]]:
             if node_dir_name in _STRUCTURAL_ONLY:
                 _check_node_structural(CUSTOM_NODES_PATH / node_dir_name)
             else:
-                _import_node_by_path(node_dir_name)
+                module = _import_node_by_path(node_dir_name)
+                # Post-import registration check: verify required keys exist in
+                # NODE_CLASS_MAPPINGS so that silent inner-ImportError swallowing
+                # (e.g. missing dep inside a try/except in __init__.py) is caught
+                # here rather than on a live GPU job.
+                required_keys = _NODE_REGISTRATION_CHECKS.get(node_dir_name, [])
+                if required_keys:
+                    mappings = getattr(module, "NODE_CLASS_MAPPINGS", None)
+                    if mappings is None:
+                        raise ImportError(
+                            f"{node_dir_name}: module has no NODE_CLASS_MAPPINGS attribute"
+                        )
+                    missing = [k for k in required_keys if k not in mappings]
+                    if missing:
+                        present = sorted(mappings.keys())
+                        raise ImportError(
+                            f"{node_dir_name}: required node(s) missing from "
+                            f"NODE_CLASS_MAPPINGS: {missing}. "
+                            f"Present keys: {present}"
+                        )
         except Exception:
             failures.append((node_dir_name, traceback.format_exc()))
     return failures

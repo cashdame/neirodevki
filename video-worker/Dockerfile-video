@@ -55,8 +55,8 @@ RUN git clone https://github.com/kijai/ComfyUI-WanVideoWrapper \
     && rm -rf .git
 
 # Fannovel16/ComfyUI-Frame-Interpolation @ 26545cc
-# No requirements.txt at this SHA — deps installed via ComfyUI manager (install.py)
-# at runtime. Nothing to pip-install here.
+# requirements-no-cupy.txt EXISTS at this SHA — deps pip-installed explicitly in Layer 5.
+# install.py intentionally NOT run (Manager absent on serverless). cupy omitted.
 RUN git clone https://github.com/Fannovel16/ComfyUI-Frame-Interpolation \
       /comfyui/custom_nodes/ComfyUI-Frame-Interpolation \
     && cd /comfyui/custom_nodes/ComfyUI-Frame-Interpolation \
@@ -126,7 +126,7 @@ RUN git clone https://github.com/kijai/ComfyUI-WanAnimatePreprocess \
 # Layer 5: pip requirements from custom nodes
 #
 # WanVideoWrapper: has requirements.txt
-# Frame-Interpolation: no requirements.txt (install.py only)
+# Frame-Interpolation: has requirements-no-cupy.txt @26545cc — installed explicitly below
 # SeedVR2: has requirements.txt (torch/torchvision already on base — pip skips)
 # LatentSyncWrapper: has requirements.txt
 # controlnet_aux: has requirements.txt — contains onnxruntime-gpu which conflicts
@@ -137,13 +137,28 @@ RUN git clone https://github.com/kijai/ComfyUI-WanAnimatePreprocess \
 # WanAnimatePreprocess: requirements intentionally NOT installed here — see note above.
 # ---------------------------------------------------------------------------
 
+# Torch-version-sensitive: install torchvision from PyTorch cu126 index BEFORE any
+# requirements.txt that lists it unpinned (Frame-Interpolation, SeedVR2). Ensures a
+# CUDA-compatible wheel is chosen, not a PyPI CPU-only build (would import fine but
+# crash RIFE at runtime on CUDA tensors). cu126 matches worker-comfyui:5.8.5-base.
+RUN pip install --no-cache-dir \
+      --index-url https://download.pytorch.org/whl/cu126 \
+      torchvision
+
 RUN pip install --no-cache-dir \
       -r /comfyui/custom_nodes/ComfyUI-WanVideoWrapper/requirements.txt
 
-# Frame-Interpolation needs kornia for RIFE_VFI node registration (iter18).
-# Other deps (torch, numpy, scipy, Pillow, einops, tqdm) already in base image.
-# cupy is optional (GPU accel for RIFE) — skipped to avoid CUDA-version conflicts.
-RUN pip install --no-cache-dir kornia
+# Frame-Interpolation @26545cc HAS requirements-no-cupy.txt (9 pkgs); Manager install.py
+# does NOT run on serverless worker-comfyui, so deps must be installed explicitly here.
+# packaging -> imported in vfi_models/rife/__init__.py; torchvision -> in vfi_utils.py
+# (loaded on every RIFE import). scipy -> other vfi_models. kornia -> gmfss/ifunet.
+# opencv-contrib-python OMITTED — conflicts with opencv-python-headless already installed.
+# cupy OMITTED — RIFE works on torch without it.
+# torchvision: NOT listed here — installed from cu126 index above to prevent CPU-only wheel.
+RUN pip install --no-cache-dir \
+      kornia \
+      scipy \
+      packaging
 
 RUN pip install --no-cache-dir \
       -r /comfyui/custom_nodes/ComfyUI-SeedVR2_VideoUpscaler/requirements.txt

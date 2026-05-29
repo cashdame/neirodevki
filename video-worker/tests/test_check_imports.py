@@ -345,5 +345,82 @@ class TestStructuralCheck(unittest.TestCase):
         self.assertNotIn("ComfyUI-ReActor", structural_calls)
 
 
+class TestNodeRegistrationCheck(unittest.TestCase):
+    """Tests for NODE_CLASS_MAPPINGS registration verification in check_node_imports()."""
+
+    def _make_module_with_mappings(self, mappings: dict) -> types.ModuleType:
+        """Return a fake imported module with the given NODE_CLASS_MAPPINGS."""
+        mod = types.ModuleType("fake_node")
+        mod.NODE_CLASS_MAPPINGS = mappings
+        return mod
+
+    def test_registration_check_passes_when_key_present(self):
+        """check_node_imports reports no failure when required key is in NODE_CLASS_MAPPINGS."""
+        ci = _load_fresh()
+
+        fake_module = self._make_module_with_mappings({"RIFE VFI": object()})
+
+        with patch.object(ci, "_import_node_by_path", return_value=fake_module):
+            failures = ci.check_node_imports(["ComfyUI-Frame-Interpolation"])
+
+        self.assertEqual(failures, [], "Expected no failures when RIFE VFI key is present")
+
+    def test_registration_check_fails_when_key_missing(self):
+        """check_node_imports reports failure when required key absent from NODE_CLASS_MAPPINGS."""
+        ci = _load_fresh()
+
+        # Module imported successfully, but RIFE VFI not registered (dep swallowed error).
+        fake_module = self._make_module_with_mappings({"FILM VFI": object()})
+
+        with patch.object(ci, "_import_node_by_path", return_value=fake_module):
+            failures = ci.check_node_imports(["ComfyUI-Frame-Interpolation"])
+
+        self.assertEqual(len(failures), 1, "Expected exactly one failure")
+        node_name, tb_str = failures[0]
+        self.assertEqual(node_name, "ComfyUI-Frame-Interpolation")
+        self.assertIn("RIFE VFI", tb_str, "Failure traceback must mention the missing key")
+        self.assertIn("NODE_CLASS_MAPPINGS", tb_str, "Failure traceback must mention NODE_CLASS_MAPPINGS")
+
+    def test_registration_check_fails_when_no_mappings_attr(self):
+        """check_node_imports reports failure when module has no NODE_CLASS_MAPPINGS at all."""
+        ci = _load_fresh()
+
+        # Module imported but NODE_CLASS_MAPPINGS attribute entirely absent.
+        bare_module = types.ModuleType("bare_node")
+
+        with patch.object(ci, "_import_node_by_path", return_value=bare_module):
+            failures = ci.check_node_imports(["ComfyUI-Frame-Interpolation"])
+
+        self.assertEqual(len(failures), 1)
+        _node_name, tb_str = failures[0]
+        self.assertIn("NODE_CLASS_MAPPINGS", tb_str)
+
+    def test_registration_check_not_applied_to_other_nodes(self):
+        """Nodes absent from _NODE_REGISTRATION_CHECKS skip the key verification."""
+        ci = _load_fresh()
+
+        # Module for WanVideoWrapper has no NODE_CLASS_MAPPINGS — should still pass
+        # because WanVideoWrapper is not in _NODE_REGISTRATION_CHECKS.
+        bare_module = types.ModuleType("wan_node")
+
+        with patch.object(ci, "_import_node_by_path", return_value=bare_module):
+            failures = ci.check_node_imports(["ComfyUI-WanVideoWrapper"])
+
+        self.assertEqual(failures, [], "Nodes not in _NODE_REGISTRATION_CHECKS must not be checked")
+
+    def test_rife_vfi_key_in_registration_checks(self):
+        """_NODE_REGISTRATION_CHECKS must list 'RIFE VFI' for ComfyUI-Frame-Interpolation."""
+        ci = _load_fresh()
+        checks = ci._NODE_REGISTRATION_CHECKS
+        self.assertIn(
+            "ComfyUI-Frame-Interpolation", checks,
+            "ComfyUI-Frame-Interpolation must be in _NODE_REGISTRATION_CHECKS",
+        )
+        self.assertIn(
+            "RIFE VFI", checks["ComfyUI-Frame-Interpolation"],
+            "'RIFE VFI' must be a required key for ComfyUI-Frame-Interpolation",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
