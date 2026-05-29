@@ -76,6 +76,12 @@ comfyui:
     detection: |
         /runpod-volume/models/detection/
         /runpod-volume/detection/
+    facerestore_models: |
+        /runpod-volume/models/facerestore_models/
+        /runpod-volume/facerestore_models/
+    insightface: |
+        /runpod-volume/models/insightface/
+        /runpod-volume/insightface/
 YAML
 echo "entrypoint: wrote /comfyui/extra_model_paths.yaml (iter14)"
 
@@ -86,7 +92,7 @@ echo "entrypoint: wrote /comfyui/extra_model_paths.yaml (iter14)"
 # If COMFYUI_DIR already exists as an empty directory (created by base image),
 # remove it first so the symlink can be placed.
 # ---------------------------------------------------------------------------
-for MODEL_TYPE in diffusion_models text_encoders clip loras vae upscale_models clip_vision detection; do
+for MODEL_TYPE in diffusion_models text_encoders clip loras vae upscale_models clip_vision detection facerestore_models insightface; do
     COMFYUI_DIR="/comfyui/models/${MODEL_TYPE}"
 
     # Try both populate layouts.
@@ -149,5 +155,10 @@ if [ -n "${RP_UPLOAD}" ] && [ -f "${RP_UPLOAD}" ]; then
 else
     echo "entrypoint: WARN — could not locate rp_upload.py" >&2
 fi
+
+# Faceswap model diagnostics — visible on every cold start so path issues are
+# caught immediately without a separate debug run.
+echo "[faceswap-diag] inswapper: $(ls /comfyui/models/insightface/ 2>/dev/null | grep -i inswapper || echo MISSING)"
+echo "[faceswap-diag] gfpgan: $(ls /comfyui/models/facerestore_models/ 2>/dev/null | grep -i gfpgan || echo MISSING)"
 
 exec /start.sh

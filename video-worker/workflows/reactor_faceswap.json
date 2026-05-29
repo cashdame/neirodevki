@@ -1,0 +1,61 @@
+{
+  "200": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "PLACEHOLDER_REF_FACE",
+      "upload": "image"
+    }
+  },
+  "201": {
+    "class_type": "VHS_LoadVideo",
+    "inputs": {
+      "video": "PLACEHOLDER_DRIVING_VIDEO",
+      "force_rate": 0,
+      "force_size": "Disabled",
+      "custom_width": 512,
+      "custom_height": 512,
+      "frame_load_cap": 90,
+      "skip_first_frames": 0,
+      "select_every_nth": 1,
+      "unique_id": 0
+    }
+  },
+  "202": {
+    "class_type": "ReActorFaceBoost",
+    "_comment": "Config node only — does NOT process frames itself. Wired into ReActorFaceSwap (203) via face_boost slot. Enhancement runs INSIDE the swap, AFTER the swap, not as a separate pass. codeformer_weight is a no-op when boost_model=GFPGAN (ignored by GFPGAN path). face_restore_model=none on 203 + GFPGAN boost here = single restoration step total.",
+    "inputs": {
+      "enabled": true,
+      "boost_model": "GFPGANv1.4.pth",
+      "interpolation": "Lanczos",
+      "visibility": 1,
+      "codeformer_weight": 0.5,
+      "restore_with_main_after": false
+    }
+  },
+  "203": {
+    "class_type": "ReActorFaceSwap",
+    "inputs": {
+      "enabled": true,
+      "input_image": ["201", 0],
+      "source_image": ["200", 0],
+      "face_boost": ["202", 0],
+      "swap_model": "inswapper_128.onnx",
+      "facedetection": "retinaface_resnet50",
+      "face_restore_model": "none",
+      "face_restore_visibility": 1,
+      "codeformer_weight": 0.5,
+      "detect_gender_input": "no",
+      "detect_gender_source": "no",
+      "input_faces_index": "0",
+      "source_faces_index": "0",
+      "console_log_level": 1
+    }
+  },
+  "204": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["203", 0],
+      "filename_prefix": "FaceSwap"
+    }
+  }
+}
