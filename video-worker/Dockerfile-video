@@ -57,11 +57,28 @@ RUN git clone https://github.com/kijai/ComfyUI-WanVideoWrapper \
 # Fannovel16/ComfyUI-Frame-Interpolation @ 26545cc
 # requirements-no-cupy.txt EXISTS at this SHA — deps pip-installed explicitly in Layer 5.
 # install.py intentionally NOT run (Manager absent on serverless). cupy omitted.
+#
+# iter22 PATCH: vfi_utils.py and vfi_models/rife/rife_arch.py both call get_torch_device()
+# at module level. This executes when ComfyUI scans custom_nodes at startup, before CUDA
+# is fully initialised on the GPU worker. The exception is caught by ComfyUI's node-loader
+# try/except and RIFE_VFI is silently dropped from NODE_CLASS_MAPPINGS — the node exists
+# in the filesystem but is never registered, so workflows fail with missing_node_type RIFE_VFI.
+#
+# Fix: replace both module-level calls with lazy equivalents (called only during inference):
+#   - vfi_utils.py: DEVICE = get_torch_device() → _get_device() lazy function
+#   - rife_arch.py: device = get_torch_device() → use tenFlow.device in warp()
+# Patched copies live in patches/ and are copied over the git-cloned originals below.
 RUN git clone https://github.com/Fannovel16/ComfyUI-Frame-Interpolation \
       /comfyui/custom_nodes/ComfyUI-Frame-Interpolation \
     && cd /comfyui/custom_nodes/ComfyUI-Frame-Interpolation \
     && git checkout 26545cc2dd95bc3d27f056016300673bdeee78f5 \
     && rm -rf .git
+
+# iter22: overwrite module-level-CUDA-call files with lazy-patched versions.
+COPY patches/vfi_utils.py \
+     /comfyui/custom_nodes/ComfyUI-Frame-Interpolation/vfi_utils.py
+COPY patches/rife_arch.py \
+     /comfyui/custom_nodes/ComfyUI-Frame-Interpolation/vfi_models/rife/rife_arch.py
 
 # numz/ComfyUI-SeedVR2_VideoUpscaler @ 4490bd1
 RUN git clone https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler \

@@ -161,4 +161,35 @@ fi
 echo "[faceswap-diag] inswapper: $(ls /comfyui/models/insightface/ 2>/dev/null | grep -i inswapper || echo MISSING)"
 echo "[faceswap-diag] gfpgan: $(ls /comfyui/models/facerestore_models/ 2>/dev/null | grep -i gfpgan || echo MISSING)"
 
+# ---------------------------------------------------------------------------
+# iter22: RIFE import diagnostic — runs on REAL GPU, no CUDA mock.
+#
+# Imports ComfyUI-Frame-Interpolation __init__.py directly and prints whether
+# RIFE VFI appears in NODE_CLASS_MAPPINGS. If the iter22 lazy-patch worked,
+# you will see:
+#   [rife-diag] RIFE VFI present: True | keys: [...]
+# If something is still wrong (exception swallowed by ComfyUI node-loader),
+# this block surfaces the actual traceback BEFORE ComfyUI starts.
+#
+# `|| true` ensures a diagnostic failure does not abort worker startup.
+# ---------------------------------------------------------------------------
+echo "=== RIFE import diagnostic (real GPU, no CUDA mock) ==="
+python -c "
+import sys, traceback, importlib.util
+sys.path.insert(0, '/comfyui/custom_nodes/ComfyUI-Frame-Interpolation')
+try:
+    spec = importlib.util.spec_from_file_location(
+        '_rife_diag',
+        '/comfyui/custom_nodes/ComfyUI-Frame-Interpolation/__init__.py',
+        submodule_search_locations=['/comfyui/custom_nodes/ComfyUI-Frame-Interpolation'])
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    m = getattr(mod, 'NODE_CLASS_MAPPINGS', {})
+    print('[rife-diag] RIFE VFI present:', 'RIFE VFI' in m, '| keys:', list(m.keys()))
+except Exception:
+    print('[rife-diag] IMPORT FAILED:')
+    traceback.print_exc()
+" 2>&1 || true
+echo "=== END RIFE diagnostic ==="
+
 exec /start.sh
