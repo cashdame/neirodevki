@@ -2,19 +2,19 @@
   "200": {
     "class_type": "LoadImage",
     "inputs": {
-      "image": "PLACEHOLDER_REF_FACE",
+      "image": "ref_face.png",
       "upload": "image"
     }
   },
   "201": {
     "class_type": "VHS_LoadVideo",
     "inputs": {
-      "video": "PLACEHOLDER_DRIVING_VIDEO",
+      "video": "driving.mp4",
       "force_rate": 0,
       "force_size": "Disabled",
       "custom_width": 512,
       "custom_height": 512,
-      "frame_load_cap": 90,
+      "frame_load_cap": 0,
       "skip_first_frames": 0,
       "select_every_nth": 1,
       "unique_id": 0
@@ -53,9 +53,27 @@
   },
   "204": {
     "class_type": "SaveImage",
+    "_comment": "Kept as secondary output (individual swapped frames). Primary output is VHS_VideoCombine (205).",
     "inputs": {
       "images": ["203", 0],
       "filename_prefix": "FaceSwap"
+    }
+  },
+  "205": {
+    "class_type": "VHS_VideoCombine",
+    "_comment": "Primary output: combines swapped frames back into mp4 with original audio. VHS_LoadVideo (201) output slots: 0=IMAGE, 1=frame_count, 2=audio, 3=video_info (VideoHelperSuite standard). Audio slot 2 carries the original soundtrack (trending beat) for 1-to-1 reel replication.",
+    "inputs": {
+      "images": ["203", 0],
+      "audio": ["201", 2],
+      "frame_rate": 30,
+      "loop_count": 0,
+      "filename_prefix": "FaceSwapVid",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": false,
+      "save_output": true,
+      "pingpong": false
     }
   }
 }

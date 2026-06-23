@@ -35,6 +35,65 @@ fi
 rm -f "${CHECK_STDERR}"
 
 # ---------------------------------------------------------------------------
+# iter23: idempotent faceswap weight download onto the network volume.
+#
+# ReActor swap_model lists only files physically present in insightface/ at
+# ComfyUI startup — symlinks from iter13+ require the real files to exist on
+# the volume first.  This block downloads them once; subsequent cold starts
+# skip the download (file present + size > 1 MB).
+#
+# Placed BEFORE extra_model_paths.yaml + symlink loop so the directories
+# exist and are populated before ComfyUI discovers them.
+#
+# Models sourced from the canonical ReActor HuggingFace dataset repo
+# (same source referenced in the ReActor README).
+# ---------------------------------------------------------------------------
+FACESWAP_INSWAPPER_DST="/runpod-volume/models/insightface/inswapper_128.onnx"
+FACESWAP_INSWAPPER_URL="https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/inswapper_128.onnx"
+FACESWAP_GFPGAN_DST="/runpod-volume/models/facerestore_models/GFPGANv1.4.pth"
+FACESWAP_GFPGAN_URL="https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/facerestore_models/GFPGANv1.4.pth"
+FACESWAP_MIN_SIZE=1048576  # 1 MB — anything smaller is a broken download
+
+_download_if_missing() {
+    local dst="$1"
+    local url="$2"
+    local label="$3"
+    local dir
+    dir="$(dirname "${dst}")"
+
+    mkdir -p "${dir}"
+
+    local actual_size=0
+    if [ -f "${dst}" ]; then
+        actual_size=$(stat -c%s "${dst}" 2>/dev/null || echo 0)
+    fi
+
+    if [ "${actual_size}" -ge "${FACESWAP_MIN_SIZE}" ]; then
+        echo "[faceswap-dl] ${label} already on volume (${actual_size} bytes), skipping."
+        return 0
+    fi
+
+    if [ -f "${dst}" ]; then
+        echo "[faceswap-dl] ${label} exists but too small (${actual_size} bytes) — removing and re-downloading."
+        rm -f "${dst}"
+    fi
+
+    echo "[faceswap-dl] Downloading ${label} -> ${dst} ..."
+    if wget --tries=3 --timeout=120 --no-verbose -O "${dst}" "${url}"; then
+        local final_size
+        final_size=$(stat -c%s "${dst}" 2>/dev/null || echo 0)
+        echo "[faceswap-dl] ${label} downloaded: ${final_size} bytes."
+    else
+        echo "[faceswap-dl] ERROR: failed to download ${label} from ${url}" >&2
+        rm -f "${dst}"  # remove partial file so next restart retries
+        exit 1
+    fi
+}
+
+_download_if_missing "${FACESWAP_INSWAPPER_DST}" "${FACESWAP_INSWAPPER_URL}" "inswapper_128.onnx"
+_download_if_missing "${FACESWAP_GFPGAN_DST}"    "${FACESWAP_GFPGAN_URL}"    "GFPGANv1.4.pth"
+
+# ---------------------------------------------------------------------------
 # iter13: write extra_model_paths.yaml so ComfyUI discovers Wan models on the
 # network volume.
 #
