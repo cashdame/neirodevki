@@ -28,6 +28,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Layer 2: core pip deps
 # onnxruntime-gpu pinned for insightface 0.7.3 + torch CUDA 12 compatibility.
 # CI iteration 2 confirmed it is NOT present in runpod/worker-comfyui:5.8.5-base.
+# iter24: HARD-pin to 1.20.1 (last default-PyPI wheel linked against CUDA 12 /
+# libcudart.so.12). The old `>=1.18.0,<2.0.0` range silently resolved to 1.27.0,
+# which links libcudart.so.13 (CUDA 13) — absent from the CUDA-12 base image →
+# `ImportError: libcudart.so.13` broke ReActor + the check_imports startup gate.
 # ---------------------------------------------------------------------------
 RUN pip install --no-cache-dir \
       huggingface_hub \
@@ -36,7 +40,7 @@ RUN pip install --no-cache-dir \
       av \
       onnx==1.16.1 \
       timm==0.9.16 \
-      "onnxruntime-gpu>=1.18.0,<2.0.0"
+      "onnxruntime-gpu==1.20.1"
 
 # ---------------------------------------------------------------------------
 # Layer 3: insightface — needs build-essential from Layer 1
