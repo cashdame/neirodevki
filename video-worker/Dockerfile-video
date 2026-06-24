@@ -198,7 +198,72 @@ RUN pip install --no-cache-dir \
       -r /comfyui/custom_nodes/ComfyUI-VideoHelperSuite/requirements.txt
 
 # ---------------------------------------------------------------------------
-# Layer 6: entrypoint shim + smoke-test helper (Phase B)
+# Layer 6: bake Wan 2.2 Animate-14B into the image (18.4 GB).
+#
+# Placed here (after all code layers, before COPY entrypoint) so that:
+#   - Changes to entrypoint / check_imports do NOT invalidate this layer.
+#   - Changes to custom nodes / pip deps DO invalidate it (intentional —
+#     if the code base changes significantly the model layer rebuilds too,
+#     but in practice custom-node SHAs are pinned and rarely change).
+#
+# Why /comfyui/baked_models/ and NOT /comfyui/models/diffusion_models/:
+#   entrypoint-video.sh symlinks /comfyui/models/diffusion_models/ ->
+#   /runpod-volume/models/diffusion_models/ at runtime.  Anything placed
+#   directly in /comfyui/models/diffusion_models/ would be hidden by that
+#   symlink.  /comfyui/baked_models/ is a separate, volume-independent tree
+#   exposed to ComfyUI via extra_model_paths.yaml (see entrypoint-video.sh).
+#
+# HF_TOKEN not required — repo is public.  Set as build-arg if rate-limit
+# becomes a problem on GitHub Actions.
+# HF_HUB_ENABLE_HF_TRANSFER=1 uses the Rust transfer backend (faster large
+# file downloads); it is optional and falls back silently if not installed.
+# Cache dir is purged after download to keep the layer lean.
+# ---------------------------------------------------------------------------
+ARG HF_TOKEN=""
+# hf_transfer: optional Rust-based download accelerator; falls back if unavailable.
+# huggingface_hub is already in Layer 2, but ensure latest version with XetHub CAS support.
+RUN pip install --quiet --no-cache-dir "huggingface_hub>=0.23" hf_transfer || \
+    pip install --quiet --no-cache-dir "huggingface_hub>=0.23"
+RUN mkdir -p /comfyui/baked_models/diffusion_models \
+    && HF_HUB_ENABLE_HF_TRANSFER=1 \
+       python3 - <<'PYEOF'
+import os, shutil, sys
+from pathlib import Path
+from huggingface_hub import hf_hub_download
+
+REPO_ID  = "Kijai/WanVideo_comfy_fp8_scaled"
+FILENAME = "Wan22Animate/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors"
+DST      = Path("/comfyui/baked_models/diffusion_models/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors")
+STAGE    = DST.parent / ".hf_stage"
+
+token = os.environ.get("HF_TOKEN") or None
+STAGE.mkdir(parents=True, exist_ok=True)
+
+print(f"[bake] Downloading {FILENAME} from {REPO_ID} ...", flush=True)
+downloaded = Path(hf_hub_download(
+    repo_id=REPO_ID,
+    filename=FILENAME,
+    repo_type="model",
+    local_dir=str(STAGE),
+    local_dir_use_symlinks=False,
+    token=token,
+))
+shutil.move(str(downloaded), str(DST))
+shutil.rmtree(STAGE, ignore_errors=True)
+# purge HF cache to keep layer lean
+hf_cache = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+shutil.rmtree(hf_cache, ignore_errors=True)
+
+size = DST.stat().st_size
+print(f"[bake] Done: {size:,} bytes -> {DST}", flush=True)
+# Animate-14B fp8 is ~18.4 GB; fail loud if truncated.
+if size < 18_000_000_000:
+    print(f"[bake] ERROR: file too small ({size:,} bytes), expected ~18.4 GB", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+
+# ---------------------------------------------------------------------------
+# Layer 7: entrypoint shim + smoke-test helper (Phase B)
 # ---------------------------------------------------------------------------
 COPY check_imports.py /check_imports.py
 COPY entrypoint-video.sh /entrypoint-video.sh

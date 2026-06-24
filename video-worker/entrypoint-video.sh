@@ -78,11 +78,8 @@ MODELS = [
         "/runpod-volume/models/facerestore_models/GFPGANv1.4.pth",
     ),
     # --- Wan 2.2 Animate (ex-iter25) ---
-    (
-        "Kijai/WanVideo_comfy_fp8_scaled", "model",
-        "Wan22Animate/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors",
-        "/runpod-volume/models/diffusion_models/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors",
-    ),
+    # Wan2_2-Animate-14B baked into image at /comfyui/baked_models/diffusion_models/
+    # — no runtime download needed. See Dockerfile-video Layer 6.
     (
         "Comfy-Org/Wan_2.1_ComfyUI_repackaged", "model",
         "split_files/clip_vision/clip_vision_h.safetensors",
@@ -227,6 +224,7 @@ echo "entrypoint: iter26 done"
 cat > /comfyui/extra_model_paths.yaml << 'YAML'
 comfyui:
     diffusion_models: |
+        /comfyui/baked_models/diffusion_models/
         /runpod-volume/models/diffusion_models/
         /runpod-volume/diffusion_models/
     text_encoders: |
@@ -255,6 +253,10 @@ comfyui:
         /runpod-volume/insightface/
 YAML
 echo "entrypoint: wrote /comfyui/extra_model_paths.yaml (iter14)"
+
+# Verify baked Animate-14B is present in the image layer.
+echo "[bake-diag] baked_models/diffusion_models:"
+ls -la /comfyui/baked_models/diffusion_models/ 2>/dev/null || echo "[bake-diag] WARN: /comfyui/baked_models/diffusion_models/ not found"
 
 # ---------------------------------------------------------------------------
 # Symlink approach as belt-and-suspenders: also create symlinks if the volume
