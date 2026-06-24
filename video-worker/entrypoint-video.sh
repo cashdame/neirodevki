@@ -35,109 +35,175 @@ fi
 rm -f "${CHECK_STDERR}"
 
 # ---------------------------------------------------------------------------
-# iter23: idempotent faceswap weight download onto the network volume.
+# iter26: idempotent model download via huggingface_hub (replaces iter23+iter25 wget).
 #
-# ReActor swap_model lists only files physically present in insightface/ at
-# ComfyUI startup — symlinks from iter13+ require the real files to exist on
-# the volume first.  This block downloads them once; subsequent cold starts
-# skip the download (file present + size > 1 MB).
+# huggingface_hub.hf_hub_download:
+#   - Handles XetHub CAS (plain wget/curl only gets a manifest for Xet-backed files).
+#   - Resumes partial downloads automatically.
+#   - Does NOT re-verify a file already at local_dir/{filename} by default, so we
+#     add a pre-check: if the file exists but its size differs from the HF metadata
+#     size, delete it first so hf_hub_download re-fetches cleanly.  This is the
+#     critical guard for the Animate-14B 18.4 GB file that was left partial by wget.
 #
-# Placed BEFORE extra_model_paths.yaml + symlink loop so the directories
-# exist and are populated before ComfyUI discovers them.
+# Covers (previously iter23): inswapper_128.onnx, GFPGANv1.4.pth
+# Covers (previously iter25): Wan2_2 Animate backbone, clip_vision_h, yolov10m,
+#                              vitpose model+data
 #
-# Models sourced from the canonical ReActor HuggingFace dataset repo
-# (same source referenced in the ReActor README).
+# Placed BEFORE iter13 (extra_model_paths.yaml + symlink loop).
 # ---------------------------------------------------------------------------
-FACESWAP_INSWAPPER_DST="/runpod-volume/models/insightface/inswapper_128.onnx"
-FACESWAP_INSWAPPER_URL="https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/inswapper_128.onnx"
-FACESWAP_GFPGAN_DST="/runpod-volume/models/facerestore_models/GFPGANv1.4.pth"
-FACESWAP_GFPGAN_URL="https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/facerestore_models/GFPGANv1.4.pth"
-FACESWAP_MIN_SIZE=1048576  # 1 MB — anything smaller is a broken download
+echo "entrypoint: iter26 — downloading models via huggingface_hub"
 
-_download_if_missing() {
-    local dst="$1"
-    local url="$2"
-    local label="$3"
-    local dir
-    dir="$(dirname "${dst}")"
+python3 - <<'PYEOF'
+import os
+import sys
+import shutil
+from pathlib import Path
+from huggingface_hub import hf_hub_download, HfApi
 
-    mkdir -p "${dir}"
+HF_TOKEN = os.environ.get("HF_TOKEN")  # public repos — token optional, avoids rate-limit
 
-    local actual_size=0
-    if [ -f "${dst}" ]; then
-        actual_size=$(stat -c%s "${dst}" 2>/dev/null || echo 0)
-    fi
+# Each entry: (repo_id, repo_type, filename_in_repo, dst_path_on_volume)
+# filename_in_repo is the path as stored in the HF repo (may contain subdirs).
+# dst_path_on_volume is the exact path ComfyUI expects.
+MODELS = [
+    # --- faceswap (ex-iter23) ---
+    (
+        "Gourieff/ReActor", "dataset",
+        "models/inswapper_128.onnx",
+        "/runpod-volume/models/insightface/inswapper_128.onnx",
+    ),
+    (
+        "Gourieff/ReActor", "dataset",
+        "models/facerestore_models/GFPGANv1.4.pth",
+        "/runpod-volume/models/facerestore_models/GFPGANv1.4.pth",
+    ),
+    # --- Wan 2.2 Animate (ex-iter25) ---
+    (
+        "Kijai/WanVideo_comfy_fp8_scaled", "model",
+        "Wan22Animate/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors",
+        "/runpod-volume/models/diffusion_models/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors",
+    ),
+    (
+        "Comfy-Org/Wan_2.1_ComfyUI_repackaged", "model",
+        "split_files/clip_vision/clip_vision_h.safetensors",
+        "/runpod-volume/models/clip_vision/clip_vision_h.safetensors",
+    ),
+    (
+        "Wan-AI/Wan2.2-Animate-14B", "model",
+        "process_checkpoint/det/yolov10m.onnx",
+        "/runpod-volume/models/detection/yolov10m.onnx",
+    ),
+    (
+        "Kijai/vitpose_comfy", "model",
+        "onnx/vitpose_h_wholebody_model.onnx",
+        "/runpod-volume/models/detection/vitpose_h_wholebody_model.onnx",
+    ),
+    (
+        "Kijai/vitpose_comfy", "model",
+        "onnx/vitpose_h_wholebody_data.bin",
+        "/runpod-volume/models/detection/vitpose_h_wholebody_data.bin",
+    ),
+]
 
-    if [ "${actual_size}" -ge "${FACESWAP_MIN_SIZE}" ]; then
-        echo "[faceswap-dl] ${label} already on volume (${actual_size} bytes), skipping."
-        return 0
-    fi
+api = HfApi(token=HF_TOKEN)
 
-    if [ -f "${dst}" ]; then
-        echo "[faceswap-dl] ${label} exists but too small (${actual_size} bytes) — removing and re-downloading."
-        rm -f "${dst}"
-    fi
+def get_expected_size(repo_id, repo_type, filename):
+    """Return expected file size in bytes from HF metadata, or None on error."""
+    try:
+        # get_paths_info returns a list of RepoSibling / RepoFile objects.
+        infos = api.get_paths_info(
+            repo_id=repo_id,
+            paths=filename,
+            repo_type=repo_type,
+            expand=True,
+        )
+        for item in infos:
+            if hasattr(item, "lfs") and item.lfs is not None:
+                return item.lfs.size
+            if hasattr(item, "size") and item.size is not None:
+                return item.size
+    except Exception as exc:
+        print(f"[hf-dl] WARN: could not fetch metadata for {repo_id}/{filename}: {exc}", flush=True)
+    return None
 
-    echo "[faceswap-dl] Downloading ${label} -> ${dst} ..."
-    if wget --tries=3 --timeout=120 --no-verbose -O "${dst}" "${url}"; then
-        local final_size
-        final_size=$(stat -c%s "${dst}" 2>/dev/null || echo 0)
-        echo "[faceswap-dl] ${label} downloaded: ${final_size} bytes."
-    else
-        echo "[faceswap-dl] ERROR: failed to download ${label} from ${url}" >&2
-        rm -f "${dst}"  # remove partial file so next restart retries
-        exit 1
-    fi
-}
+def ensure_model(repo_id, repo_type, filename, dst):
+    dst = Path(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    label = dst.name
 
-_download_if_missing "${FACESWAP_INSWAPPER_DST}" "${FACESWAP_INSWAPPER_URL}" "inswapper_128.onnx"
-_download_if_missing "${FACESWAP_GFPGAN_DST}"    "${FACESWAP_GFPGAN_URL}"    "GFPGANv1.4.pth"
+    expected = get_expected_size(repo_id, repo_type, filename)
 
-# ---------------------------------------------------------------------------
-# iter25: idempotent download of Wan 2.2 Animate models onto the network volume.
-#
-# These models are required by the wan_animate.json workflow but are NOT present
-# on the volume after the standard Wan 2.1 i2v setup:
-#   - Animate backbone (14B fp8, ~16 GB)         → diffusion_models/
-#   - CLIP Vision H encoder                      → clip_vision/
-#   - YOLOv10m detection model (ONNX)            → detection/
-#   - ViTPose wholebody model (ONNX)             → detection/
-#   - ViTPose wholebody external data (.bin)     → detection/  (required by ONNX runtime)
-#
-# Uses the same _download_if_missing helper as iter23 (idempotent, exits 1 on
-# failure so broken cold-starts are caught immediately).
-#
-# Placed BEFORE iter13 (extra_model_paths.yaml + symlink loop) so the files
-# are present when ComfyUI discovers them.
-# ---------------------------------------------------------------------------
-echo "entrypoint: iter25 — downloading Wan 2.2 Animate models if missing"
+    if dst.exists():
+        actual = dst.stat().st_size
+        if expected is not None and actual != expected:
+            print(
+                f"[hf-dl] {label}: stale/partial file on volume "
+                f"({actual:,} bytes, expected {expected:,}) — removing.",
+                flush=True,
+            )
+            dst.unlink()
+        elif expected is None and actual > 0:
+            # Metadata unavailable; trust the existing file to avoid re-downloading.
+            print(f"[hf-dl] {label}: already on volume ({actual:,} bytes, size unverified), skipping.", flush=True)
+            return
+        else:
+            print(f"[hf-dl] {label}: already on volume ({actual:,} bytes), skipping.", flush=True)
+            return
 
-_download_if_missing \
-    "/runpod-volume/models/diffusion_models/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors" \
-    "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/Wan22Animate/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors" \
-    "Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors"
+    print(f"[hf-dl] {label}: downloading from {repo_id} ...", flush=True)
 
-_download_if_missing \
-    "/runpod-volume/models/clip_vision/clip_vision_h.safetensors" \
-    "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors" \
-    "clip_vision_h.safetensors"
+    # hf_hub_download with local_dir places the file at:
+    #   {local_dir}/{filename}   (preserving subdirectories from the repo).
+    # We use a temp staging dir so we can move the result to the exact dst path.
+    stage_dir = dst.parent / ".hf_stage"
+    stage_dir.mkdir(parents=True, exist_ok=True)
 
-_download_if_missing \
-    "/runpod-volume/models/detection/yolov10m.onnx" \
-    "https://huggingface.co/Wan-AI/Wan2.2-Animate-14B/resolve/main/process_checkpoint/det/yolov10m.onnx" \
-    "yolov10m.onnx"
+    try:
+        downloaded = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            repo_type=repo_type,
+            local_dir=str(stage_dir),
+            local_dir_use_symlinks=False,
+            token=HF_TOKEN,
+        )
+        downloaded = Path(downloaded)
+        # Move to the exact target path expected by ComfyUI.
+        shutil.move(str(downloaded), str(dst))
+    finally:
+        # Clean up the staging dir (including any empty subdirs left by hf_hub).
+        if stage_dir.exists():
+            shutil.rmtree(stage_dir, ignore_errors=True)
 
-_download_if_missing \
-    "/runpod-volume/models/detection/vitpose_h_wholebody_model.onnx" \
-    "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_model.onnx" \
-    "vitpose_h_wholebody_model.onnx"
+    final_size = dst.stat().st_size
+    print(f"[hf-dl] {label}: done ({final_size:,} bytes -> {dst})", flush=True)
 
-_download_if_missing \
-    "/runpod-volume/models/detection/vitpose_h_wholebody_data.bin" \
-    "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_data.bin" \
-    "vitpose_h_wholebody_data.bin"
+    if expected is not None and final_size != expected:
+        print(
+            f"[hf-dl] ERROR: {label} size mismatch after download "
+            f"(got {final_size:,}, expected {expected:,})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-echo "entrypoint: iter25 done"
+errors = []
+for repo_id, repo_type, filename, dst in MODELS:
+    try:
+        ensure_model(repo_id, repo_type, filename, dst)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"[hf-dl] ERROR: {dst} — {exc}", file=sys.stderr, flush=True)
+        errors.append(dst)
+
+if errors:
+    print(f"[hf-dl] {len(errors)} model(s) failed to download — aborting.", file=sys.stderr)
+    sys.exit(1)
+
+print("[hf-dl] All models ready.", flush=True)
+PYEOF
+
+echo "entrypoint: iter26 done"
 
 # ---------------------------------------------------------------------------
 # iter13: write extra_model_paths.yaml so ComfyUI discovers Wan models on the
