@@ -94,6 +94,52 @@ _download_if_missing "${FACESWAP_INSWAPPER_DST}" "${FACESWAP_INSWAPPER_URL}" "in
 _download_if_missing "${FACESWAP_GFPGAN_DST}"    "${FACESWAP_GFPGAN_URL}"    "GFPGANv1.4.pth"
 
 # ---------------------------------------------------------------------------
+# iter25: idempotent download of Wan 2.2 Animate models onto the network volume.
+#
+# These models are required by the wan_animate.json workflow but are NOT present
+# on the volume after the standard Wan 2.1 i2v setup:
+#   - Animate backbone (14B fp8, ~16 GB)         → diffusion_models/
+#   - CLIP Vision H encoder                      → clip_vision/
+#   - YOLOv10m detection model (ONNX)            → detection/
+#   - ViTPose wholebody model (ONNX)             → detection/
+#   - ViTPose wholebody external data (.bin)     → detection/  (required by ONNX runtime)
+#
+# Uses the same _download_if_missing helper as iter23 (idempotent, exits 1 on
+# failure so broken cold-starts are caught immediately).
+#
+# Placed BEFORE iter13 (extra_model_paths.yaml + symlink loop) so the files
+# are present when ComfyUI discovers them.
+# ---------------------------------------------------------------------------
+echo "entrypoint: iter25 — downloading Wan 2.2 Animate models if missing"
+
+_download_if_missing \
+    "/runpod-volume/models/diffusion_models/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors" \
+    "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/Wan22Animate/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors" \
+    "Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors"
+
+_download_if_missing \
+    "/runpod-volume/models/clip_vision/clip_vision_h.safetensors" \
+    "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors" \
+    "clip_vision_h.safetensors"
+
+_download_if_missing \
+    "/runpod-volume/models/detection/yolov10m.onnx" \
+    "https://huggingface.co/Wan-AI/Wan2.2-Animate-14B/resolve/main/process_checkpoint/det/yolov10m.onnx" \
+    "yolov10m.onnx"
+
+_download_if_missing \
+    "/runpod-volume/models/detection/vitpose_h_wholebody_model.onnx" \
+    "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_model.onnx" \
+    "vitpose_h_wholebody_model.onnx"
+
+_download_if_missing \
+    "/runpod-volume/models/detection/vitpose_h_wholebody_data.bin" \
+    "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_data.bin" \
+    "vitpose_h_wholebody_data.bin"
+
+echo "entrypoint: iter25 done"
+
+# ---------------------------------------------------------------------------
 # iter13: write extra_model_paths.yaml so ComfyUI discovers Wan models on the
 # network volume.
 #
