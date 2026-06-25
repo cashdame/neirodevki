@@ -126,6 +126,23 @@ class TestBuildWorkflow(unittest.TestCase):
         wf = self._wf()
         self.assertIsInstance(wf, dict)
 
+    def test_frame_load_cap_equals_num_frames(self):
+        """VHS_LoadVideo frame_load_cap must equal num_frames (node 89) to prevent
+        sampler tensor size mismatch: pose-frame count must match generated frame count."""
+        for n in (25, 49, 81):
+            with self.subTest(num_frames=n):
+                wf = self._wf(num_frames=n)
+                self.assertEqual(
+                    wf[_mod.NODE_DRIVING_VIDEO]["inputs"]["frame_load_cap"],
+                    n,
+                    msg=f"frame_load_cap must equal num_frames={n}",
+                )
+                # Also verify consistency with node 89
+                self.assertEqual(
+                    wf[_mod.NODE_DRIVING_VIDEO]["inputs"]["frame_load_cap"],
+                    wf[_mod.NODE_ANIMATE_EMBEDS]["inputs"]["num_frames"],
+                )
+
     def test_missing_node_raises_key_error(self):
         # Simulate workflow drift: node 57 missing.
         bad_wf = {

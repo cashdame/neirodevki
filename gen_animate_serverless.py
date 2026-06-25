@@ -155,6 +155,11 @@ def build_workflow(
 
     wf[NODE_REF_IMAGE]["inputs"]["image"]                      = REF_IMAGE_NAME
     wf[NODE_DRIVING_VIDEO]["inputs"]["video"]                  = DRIVING_VID_NAME
+    # Cap driving video to exactly num_frames so pose-frame count matches the
+    # generated frame count. Without this cap VHS_LoadVideo loads all frames of
+    # the source reel, making tensor dim 2 larger than WanVideoSampler expects
+    # and causing: "size of tensor a (N) must match tensor b (M) at dim 2".
+    wf[NODE_DRIVING_VIDEO]["inputs"]["frame_load_cap"]         = num_frames
     wf[NODE_TEXT_ENCODE]["inputs"]["positive_prompt"]          = prompt
     wf[NODE_TEXT_ENCODE]["inputs"]["negative_prompt"]          = negative
     wf[NODE_ANIMATE_EMBEDS]["inputs"]["num_frames"]            = num_frames

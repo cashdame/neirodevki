@@ -100,6 +100,17 @@ MODELS = [
         "onnx/vitpose_h_wholebody_data.bin",
         "/runpod-volume/models/detection/vitpose_h_wholebody_data.bin",
     ),
+    # --- Wan Animate LoRAs (distill + relight, required for cfg=1.0 guidance) ---
+    (
+        "Kijai/WanVideo_comfy", "model",
+        "LoRAs/Wan22_relight/WanAnimate_relight_lora_fp16.safetensors",
+        "/runpod-volume/models/loras/WanAnimate_relight_lora_fp16.safetensors",
+    ),
+    (
+        "Kijai/WanVideo_comfy", "model",
+        "Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors",
+        "/runpod-volume/models/loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors",
+    ),
 ]
 
 api = HfApi(token=HF_TOKEN)
