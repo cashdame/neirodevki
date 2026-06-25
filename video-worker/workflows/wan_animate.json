@@ -73,7 +73,8 @@
       "lora_3": "none",
       "strength_3": 1.0,
       "lora_4": "none",
-      "strength_4": 1.0
+      "strength_4": 1.0,
+      "merge_loras": false
     }
   },
   "101": {
@@ -185,6 +186,75 @@
       "draw_head": true
     }
   },
+  "110": {
+    "class_type": "DownloadAndLoadSAM2Model",
+    "inputs": {
+      "model": "sam2.1_hiera_base_plus.safetensors",
+      "segmentor": "video",
+      "device": "cuda",
+      "precision": "fp16"
+    }
+  },
+  "111": {
+    "class_type": "Sam2Segmentation",
+    "inputs": {
+      "sam2_model": [
+        "110",
+        0
+      ],
+      "image": [
+        "63",
+        0
+      ],
+      "keep_model_loaded": false,
+      "bboxes": [
+        "172",
+        3
+      ],
+      "individual_objects": false
+    }
+  },
+  "112": {
+    "class_type": "GrowMaskWithBlur",
+    "inputs": {
+      "mask": [
+        "111",
+        0
+      ],
+      "expand": 10,
+      "incremental_expandrate": 0.0,
+      "tapered_corners": true,
+      "flip_input": false,
+      "blur_radius": 0.0,
+      "lerp_alpha": 1.0,
+      "decay_factor": 1.0,
+      "fill_holes": false
+    }
+  },
+  "113": {
+    "class_type": "BlockifyMask",
+    "inputs": {
+      "masks": [
+        "112",
+        0
+      ],
+      "block_size": 32
+    }
+  },
+  "114": {
+    "class_type": "DrawMaskOnImage",
+    "inputs": {
+      "image": [
+        "63",
+        0
+      ],
+      "mask": [
+        "113",
+        0
+      ],
+      "color": "0, 0, 0"
+    }
+  },
   "89": {
     "class_type": "WanVideoAnimateEmbeds",
     "inputs": {
@@ -215,6 +285,14 @@
       "face_images": [
         "172",
         1
+      ],
+      "bg_images": [
+        "114",
+        0
+      ],
+      "mask": [
+        "113",
+        0
       ]
     }
   },

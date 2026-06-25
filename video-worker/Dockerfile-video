@@ -263,6 +263,20 @@ if size < 18_000_000_000:
 PYEOF
 
 # ---------------------------------------------------------------------------
+# Layer 6b: SAM2 segmentation node (kijai/ComfyUI-segment-anything-2).
+# Required by the Animate REPLACE chain: Sam2Segmentation -> mask + bg_images,
+# without which WanVideoAnimateEmbeds runs in "animate-photo" mode instead of
+# "replace person in driving video". Placed AFTER the 18 GB model bake so that
+# layer stays cached on rebuild (only this small clone + entrypoint re-run).
+# No requirements.txt at this SHA; deps (torch etc.) come from the base image.
+# ---------------------------------------------------------------------------
+RUN git clone https://github.com/kijai/ComfyUI-segment-anything-2 \
+      /comfyui/custom_nodes/ComfyUI-segment-anything-2 \
+    && cd /comfyui/custom_nodes/ComfyUI-segment-anything-2 \
+    && git checkout 0c35fff5f382803e2310103357b5e985f5437f32 \
+    && rm -rf .git
+
+# ---------------------------------------------------------------------------
 # Layer 7: entrypoint shim + smoke-test helper (Phase B)
 # ---------------------------------------------------------------------------
 COPY check_imports.py /check_imports.py
